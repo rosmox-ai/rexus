@@ -11,8 +11,10 @@ type YouTrackLink struct {
 	ID            string    `json:"id"`
 	ProjectID     string    `json:"project_id"`
 	ProjectKey    string    `json:"project_key"`
+	ProjectName   string    `json:"project_name"`
 	ResourceType  string    `json:"resource_type"` // check | job | secret | ssl | manual
 	ResourceID    *string   `json:"resource_id"`
+	ResourceName  *string   `json:"resource_name"`
 	DedupeKey     *string   `json:"dedupe_key"`
 	YTProjectKey  string    `json:"yt_project_key"`
 	IssueID       string    `json:"issue_id"`
@@ -27,15 +29,20 @@ type YouTrackLink struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
-const ytLinkSelect = `SELECT l.id, l.project_id, p.key, l.resource_type, l.resource_id, l.dedupe_key,
+const ytLinkSelect = `SELECT l.id, l.project_id, p.key, p.name, l.resource_type, l.resource_id,
+	COALESCE(hc.name, j.name, sec.name) AS resource_name, l.dedupe_key,
 	l.yt_project_key, l.issue_id, l.issue_readable, l.issue_url, l.summary, l.state, l.priority, l.assignee,
 	l.resolved, l.created_at, l.updated_at
 	FROM youtrack_links l
-	JOIN projects p ON p.id = l.project_id`
+	JOIN projects p ON p.id = l.project_id
+	LEFT JOIN health_checks hc ON l.resource_type IN ('check', 'ssl') AND hc.id = l.resource_id
+	LEFT JOIN jobs j ON l.resource_type = 'job' AND j.id = l.resource_id
+	LEFT JOIN secrets sec ON l.resource_type = 'secret' AND sec.id = l.resource_id`
 
 func scanYTLink(row interface{ Scan(...any) error }) (*YouTrackLink, error) {
 	l := &YouTrackLink{}
-	err := row.Scan(&l.ID, &l.ProjectID, &l.ProjectKey, &l.ResourceType, &l.ResourceID, &l.DedupeKey,
+	err := row.Scan(&l.ID, &l.ProjectID, &l.ProjectKey, &l.ProjectName, &l.ResourceType, &l.ResourceID,
+		&l.ResourceName, &l.DedupeKey,
 		&l.YTProjectKey, &l.IssueID, &l.IssueReadable, &l.IssueURL, &l.Summary, &l.State, &l.Priority, &l.Assignee,
 		&l.Resolved, &l.CreatedAt, &l.UpdatedAt)
 	if err != nil {

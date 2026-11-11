@@ -327,8 +327,11 @@ export interface YouTrackIssue {
 export interface YouTrackLink {
   id: string
   project_id: string
+  project_key: string
+  project_name: string
   resource_type: 'check' | 'job' | 'secret' | 'ssl' | 'manual'
   resource_id: string | null
+  resource_name: string | null
   dedupe_key: string | null
   yt_project_key: string
   issue_id: string

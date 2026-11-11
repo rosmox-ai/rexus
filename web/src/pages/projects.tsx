@@ -10,7 +10,7 @@ import { ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 import { ProjectDeployTokens } from './deploy_tokens'
 import { ProjectAccessModal } from './access'
-import { ProjectYouTrackSection, useYouTrackStatus } from './youtrack'
+import { useYouTrackStatus } from './youtrack'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -381,7 +381,17 @@ export function ProjectDetailPage() {
       <PageHeader
         crumbs={[{ label: 'Projects', to: '/projects' }, { label: project.name }]}
         title={project.name}
-        subtitle={<span className="mono">{project.key}{project.owner_only && <span className="ml-2 rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}</span>}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-2 mono">
+            {project.key}
+            {project.owner_only && <span className="rounded border border-amber-800 px-1.5 py-0.5 text-[10px] uppercase text-amber-400">owner only</span>}
+            {project.youtrack_project_key && (
+              <Link to={`/tickets?project=${encodeURIComponent(project.key)}`} className="font-sans">
+                <Badge tone="sky">YT · {project.youtrack_project_key}</Badge>
+              </Link>
+            )}
+          </span>
+        }
         actions={
           <>
             {project.website_url && (
@@ -454,8 +464,6 @@ export function ProjectDetailPage() {
           )}
         </section>
       )}
-
-      <ProjectYouTrackSection project={project} writable={writable} admin={admin} onProjectUpdated={setProject} />
     </>
   )
 }

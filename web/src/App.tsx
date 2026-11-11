@@ -18,6 +18,7 @@ import { BackupsPage } from './pages/backups'
 import { AcceptInvitePage, ResetPasswordPage, UsersPage } from './pages/team'
 import { AuditPage } from './pages/audit'
 import { VaultPage } from './pages/vault'
+import { TicketsPage } from './pages/youtrack'
 import { cx, Spinner } from './ui'
 
 export default function App() {
@@ -77,6 +78,7 @@ export default function App() {
           </>
         )}
         {meta.modules.vault && <Route path="/vault" element={<VaultPage />} />}
+        <Route path="/tickets" element={<TicketsPage />} />
         {isAdmin(user.role) && (
           <>
             <Route path="/alerts" element={<AlertsPage />} />
@@ -139,6 +141,7 @@ function Layout() {
     { to: '/projects', label: 'Projects', icon: 'projects' },
     ...(meta?.modules.vault ? [{ to: '/vault', label: 'Vault', icon: 'vault' as IconName }] : []),
     ...(meta?.modules.scheduler ? [{ to: '/jobs', label: 'Pings', icon: 'pings' as IconName }] : [{ to: '/jobs', label: 'Health', icon: 'pings' as IconName }]),
+    { to: '/tickets', label: 'Tickets', icon: 'tickets' },
   ]
   const administration: NavItem[] = admin
     ? [

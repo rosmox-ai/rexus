@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type FormEvent, type MouseEvent } from 'react'
-import { Link } from 'react-router-dom'
-import { api, type Project, type YouTrackIssue, type YouTrackLink, type YouTrackProject } from '../api'
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { api, canWrite, isAdmin, type Project, type YouTrackIssue, type YouTrackLink, type YouTrackProject } from '../api'
+import { useAuth } from '../auth'
 import { NavIcon } from '../icons'
-import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, Select, Spinner, Textarea, cx, timeAgo } from '../ui'
+import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 
 export type { YouTrackLink, YouTrackIssue, YouTrackProject }
 
@@ -65,6 +66,20 @@ function priorityTone(priority: string | null | undefined): 'red' | 'amber' | 'z
   return 'zinc'
 }
 
+const SOURCE_LABEL: Record<YouTrackLink['resource_type'], string> = {
+  check: 'Health check',
+  job: 'Job',
+  secret: 'Secret',
+  ssl: 'SSL cert',
+  manual: 'Manual',
+}
+
+function sourceLink(l: YouTrackLink): string {
+  if ((l.resource_type === 'check' || l.resource_type === 'ssl') && l.resource_id) return `/checks/${l.resource_id}`
+  if (l.resource_type === 'job' && l.resource_id) return `/jobs/${l.resource_id}`
+  return `/projects/${l.project_key}`
+}
+
 /** Live ticket badge shown on Dashboard, Health Checks, Jobs, and Secrets (#8). */
 export function YouTrackBadge({ link }: { link?: YouTrackLink }) {
   if (!link) return null
@@ -103,6 +118,7 @@ export interface IssuePrefill {
   dueDate?: string
   resourceType?: YouTrackLink['resource_type']
   resourceId?: string
+  projects?: Project[]
 }
 
 /** 1-Click "Create YouTrack Issue" modal (#7). */
@@ -116,6 +132,7 @@ export function CreateYouTrackIssueModal({
   onCreated: (link: YouTrackLink, issue: YouTrackIssue) => void
 }) {
   const { status } = useYouTrackStatus()
+  const [rexusProjectKey, setRexusProjectKey] = useState(prefill.projectKey || prefill.projects?.[0]?.key || '')
   const [ytProject, setYtProject] = useState(prefill.ytProjectKey || '')
   const [summary, setSummary] = useState(prefill.summary)
   const [description, setDescription] = useState(prefill.description)
@@ -127,18 +144,23 @@ export function CreateYouTrackIssueModal({
 
   useEffect(() => {
     if (!ytProject && status) {
-      const def = prefill.ytProjectKey || status.default_project || status.projects[0]?.shortName || ''
+      const mapped = prefill.projects?.find((p) => p.key === rexusProjectKey)?.youtrack_project_key
+      const def = prefill.ytProjectKey || mapped || status.default_project || status.projects[0]?.shortName || ''
       if (def) setYtProject(def)
     }
-  }, [status, ytProject, prefill.ytProjectKey])
+  }, [status, ytProject, prefill.ytProjectKey, prefill.projects, rexusProjectKey])
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (!rexusProjectKey) {
+      setError('Please choose a Rexus project.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
       const r = await api<{ link: YouTrackLink; issue: YouTrackIssue }>(
-        `/api/projects/${encodeURIComponent(prefill.projectKey)}/youtrack/issues`,
+        `/api/projects/${encodeURIComponent(rexusProjectKey)}/youtrack/issues`,
         {
           method: 'POST',
           body: {
@@ -176,6 +198,27 @@ export function CreateYouTrackIssueModal({
         </div>
       ) : (
         <form onSubmit={submit} className="space-y-4">
+          {prefill.projects && prefill.projects.length > 0 && !prefill.projectKey && (
+            <Field label="Rexus project">
+              <Select
+                value={rexusProjectKey}
+                onChange={(e) => {
+                  const nextKey = e.target.value
+                  setRexusProjectKey(nextKey)
+                  const p = prefill.projects?.find((x) => x.key === nextKey)
+                  if (p?.youtrack_project_key) setYtProject(p.youtrack_project_key)
+                }}
+                required
+              >
+                {prefill.projects.map((p) => (
+                  <option key={p.id} value={p.key}>
+                    {p.name} ({p.key})
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
+
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="YouTrack project">
               {status && status.projects.length > 0 ? (
@@ -229,157 +272,284 @@ export function CreateYouTrackIssueModal({
   )
 }
 
-interface ProjectYTResp {
-  configured: boolean
-  base_url: string
-  yt_project_key: string
-  issues: YouTrackIssue[]
-  links: YouTrackLink[]
-  error?: string
-}
-
-/** Project page YouTrack panel (#2 Project mapping + #9 Open YouTrack issues panel). */
-export function ProjectYouTrackSection({
-  project,
-  writable,
-  admin,
-  onProjectUpdated,
-}: {
-  project: Project
-  writable: boolean
-  admin: boolean
-  onProjectUpdated: (p: Project) => void
-}) {
+/** Centralized Tickets page (/tickets) for all YouTrack issues raised from Rexus across all projects. */
+export function TicketsPage() {
+  const { user } = useAuth()
+  const writable = !!user && canWrite(user.role)
+  const admin = !!user && isAdmin(user.role)
   const { status } = useYouTrackStatus()
-  const [data, setData] = useState<ProjectYTResp | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [showResolved, setShowResolved] = useState(false)
+  const [links, setLinks] = useState<YouTrackLink[] | null>(null)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [savingMap, setSavingMap] = useState(false)
+  const [params, setParams] = useSearchParams()
+
+  const q = params.get('q') ?? ''
+  const stateFilter = params.get('state') ?? 'open' // 'open' | 'resolved' | 'all'
+  const projectFilter = params.get('project') ?? ''
+  const sourceFilter = params.get('source') ?? ''
+
+  const setParam = (name: string, value: string) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (value) next.set(name, value)
+        else next.delete(name)
+        return next
+      },
+      { replace: true },
+    )
 
   const load = useCallback(async () => {
-    setLoading(true)
     try {
-      const r = await api<ProjectYTResp>(`/api/projects/${encodeURIComponent(project.key)}/youtrack/issues`)
-      setData(r)
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false)
+      const [l, p] = await Promise.all([
+        api<{ links: YouTrackLink[] }>('/api/youtrack/links?unresolved=0'),
+        api<{ projects: Project[] }>('/api/projects'),
+      ])
+      setLinks(l.links ?? [])
+      setProjects(p.projects ?? [])
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
     }
-  }, [project.key])
+  }, [])
 
   useEffect(() => {
     void load()
-  }, [load, project.youtrack_project_key])
+    const t = setInterval(load, 30_000)
+    return () => clearInterval(t)
+  }, [load])
 
-  if (status && !status.configured) return null
-
-  const changeMappedProject = async (ytKey: string) => {
-    setSavingMap(true)
+  const syncNow = async () => {
+    setSyncing(true)
+    setError(null)
     try {
-      const r = await api<{ project: Project }>(`/api/projects/${encodeURIComponent(project.key)}`, {
-        method: 'PATCH',
-        body: { youtrack_project_key: ytKey },
-      })
-      onProjectUpdated(r.project)
+      const r = await api<{ links: YouTrackLink[] }>('/api/youtrack/sync', { method: 'POST' })
+      setLinks(r.links ?? [])
+    } catch (e) {
+      setError((e as Error).message)
     } finally {
-      setSavingMap(false)
+      setSyncing(false)
     }
   }
 
-  const activeYTKey = project.youtrack_project_key || data?.yt_project_key || status?.default_project || ''
-  const allIssues = data?.issues ?? []
-  const openIssues = allIssues.filter((i) => i.resolved == null)
-  const shownIssues = showResolved ? allIssues : openIssues
-  const boardUrl = data?.base_url && activeYTKey ? `${data.base_url.replace(/\/$/, '')}/issues/${encodeURIComponent(activeYTKey)}` : data?.base_url
+  const allLinks = useMemo(() => links ?? [], [links])
+  const openLinks = useMemo(() => allLinks.filter((l) => !l.resolved), [allLinks])
+  const resolvedLinks = useMemo(() => allLinks.filter((l) => l.resolved), [allLinks])
+  const highPriorityOpen = useMemo(
+    () =>
+      openLinks.filter((l) => {
+        const p = (l.priority ?? '').toLowerCase()
+        return p === 'show-stopper' || p === 'critical' || p === 'major'
+      }),
+    [openLinks],
+  )
+  const autoRaisedOpen = useMemo(() => openLinks.filter((l) => l.resource_type !== 'manual'), [openLinks])
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return allLinks.filter((l) => {
+      if (stateFilter === 'open' && l.resolved) return false
+      if (stateFilter === 'resolved' && !l.resolved) return false
+      if (projectFilter && l.project_key !== projectFilter) return false
+      if (sourceFilter && l.resource_type !== sourceFilter) return false
+      if (needle) {
+        const hay = `${l.issue_readable} ${l.summary} ${l.project_name} ${l.project_key} ${l.resource_name ?? ''} ${l.assignee ?? ''} ${l.state}`.toLowerCase()
+        if (!hay.includes(needle)) return false
+      }
+      return true
+    })
+  }, [allLinks, q, stateFilter, projectFilter, sourceFilter])
+
+  if (!links && !error) return <Spinner />
+
+  const filtered = !!(q || stateFilter !== 'open' || projectFilter || sourceFilter)
+  const clearFilters = () => setParams(new URLSearchParams(), { replace: true })
 
   return (
-    <section id="youtrack" className="mt-8 scroll-mt-6">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <h2 className="font-medium text-zinc-200">YouTrack issues</h2>
-          {activeYTKey && <Badge tone="sky">{activeYTKey}</Badge>}
-          {data && <span className="text-xs text-zinc-500">{openIssues.length} open</span>}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {admin && status && status.projects.length > 0 && (
-            <Select
-              aria-label="Linked YouTrack project"
-              value={project.youtrack_project_key ?? ''}
-              disabled={savingMap}
-              onChange={(e) => void changeMappedProject(e.target.value)}
-              className="w-auto! py-1 text-xs"
-            >
-              <option value="">
-                Default ({status.default_project || status.projects[0]?.shortName || 'auto'})
-              </option>
-              {status.projects.map((p) => (
-                <option key={p.id} value={p.shortName}>
-                  Map to {p.name} ({p.shortName})
-                </option>
-              ))}
-            </Select>
-          )}
-          { allIssues.length > openIssues.length && (
-            <button
-              type="button"
-              onClick={() => setShowResolved((v) => !v)}
-              className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200"
-            >
-              {showResolved ? 'Hide resolved' : `Show resolved (${allIssues.length - openIssues.length})`}
-            </button>
-          )}
-          {boardUrl && (
-            <a href={boardUrl} target="_blank" rel="noopener noreferrer">
-              <Button variant="ghost" className="py-1 text-xs">
-                Open YouTrack <NavIcon name="external" size={13} />
-              </Button>
-            </a>
-          )}
-          {writable && (
-            <Button variant="secondary" onClick={() => setCreating(true)}>
-              New issue
+    <>
+      <PageHeader
+        title="Tickets"
+        subtitle="Centralized view of all YouTrack issues raised from Rexus across your projects."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {status?.base_url && (
+              <a href={`${status.base_url.replace(/\/$/, '')}/issues`} target="_blank" rel="noopener noreferrer">
+                <Button variant="ghost">
+                  Open YouTrack <NavIcon name="external" size={14} />
+                </Button>
+              </a>
+            )}
+            <Button variant="secondary" disabled={syncing} onClick={syncNow}>
+              <span className={cx('inline-flex', syncing && 'animate-spin')}>
+                <NavIcon name="refresh" size={15} />
+              </span>
+              {syncing ? 'Syncing…' : 'Sync status'}
             </Button>
+            {writable && projects.length > 0 && (
+              <Button onClick={() => setCreating(true)}>New issue</Button>
+            )}
+          </div>
+        }
+      />
+
+      {status && !status.configured && (
+        <div className="mb-5 rounded-md border border-amber-900 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          YouTrack is not connected yet.{' '}
+          {admin ? (
+            <>
+              Add a YouTrack channel under{' '}
+              <Link to="/alerts?view=channels" className="font-medium underline underline-offset-2">
+                Alerts → Channels
+              </Link>{' '}
+              or set <code>REXUS_YOUTRACK_URL</code> and <code>REXUS_YOUTRACK_TOKEN</code> in <code>.env</code>.
+            </>
+          ) : (
+            'Ask an administrator to configure YouTrack under Alerts → Channels.'
           )}
         </div>
+      )}
+
+      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="px-4 py-3">
+          <div className="text-xs font-medium text-zinc-400">Open tickets</div>
+          <div className={cx('mt-1 text-xl font-semibold tabular-nums', openLinks.length > 0 ? 'text-sky-300' : 'text-zinc-50')}>
+            {openLinks.length}
+          </div>
+          <div className="mt-0.5 text-xs text-zinc-500">Unresolved in YouTrack</div>
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs font-medium text-zinc-400">High priority</div>
+          <div className={cx('mt-1 text-xl font-semibold tabular-nums', highPriorityOpen.length > 0 ? 'text-red-300' : 'text-zinc-50')}>
+            {highPriorityOpen.length}
+          </div>
+          <div className="mt-0.5 text-xs text-zinc-500">Critical &amp; Major open</div>
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs font-medium text-zinc-400">Auto-raised</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-zinc-50">{autoRaisedOpen.length}</div>
+          <div className="mt-0.5 text-xs text-zinc-500">From checks, jobs &amp; expiring keys</div>
+        </Card>
+        <Card className="px-4 py-3">
+          <div className="text-xs font-medium text-zinc-400">Resolved</div>
+          <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-400">{resolvedLinks.length}</div>
+          <div className="mt-0.5 text-xs text-zinc-500">Auto-resolved or closed</div>
+        </Card>
       </div>
 
-      {data?.error && <ErrorBox error={data.error} />}
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-[1_1_14rem] sm:max-w-xs">
+          <span className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-zinc-500">
+            <NavIcon name="search" size={16} />
+          </span>
+          <Input
+            value={q}
+            onChange={(e) => setParam('q', e.target.value)}
+            placeholder="Search ID, summary, project, assignee…"
+            aria-label="Search tickets"
+            className="pl-8"
+          />
+        </div>
+        <Select
+          value={stateFilter}
+          onChange={(e) => setParam('state', e.target.value === 'open' ? '' : e.target.value)}
+          aria-label="Filter by status"
+          className="w-auto!"
+        >
+          <option value="open">Open ({openLinks.length})</option>
+          <option value="resolved">Resolved ({resolvedLinks.length})</option>
+          <option value="all">All tickets ({allLinks.length})</option>
+        </Select>
+        {projects.length > 1 && (
+          <Select
+            value={projectFilter}
+            onChange={(e) => setParam('project', e.target.value)}
+            aria-label="Filter by project"
+            className="w-auto!"
+          >
+            <option value="">All projects</option>
+            {[...projects]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((p) => (
+                <option key={p.id} value={p.key}>
+                  {p.name}
+                </option>
+              ))}
+          </Select>
+        )}
+        <Select
+          value={sourceFilter}
+          onChange={(e) => setParam('source', e.target.value)}
+          aria-label="Filter by source"
+          className="w-auto!"
+        >
+          <option value="">All sources</option>
+          <option value="check">Health check</option>
+          <option value="job">Job</option>
+          <option value="secret">Expiring secret</option>
+          <option value="ssl">SSL certificate</option>
+          <option value="manual">Manual</option>
+        </Select>
+        {filtered && (
+          <button type="button" onClick={clearFilters} className="text-sm text-zinc-400 hover:text-zinc-200 hover:underline">
+            Clear filters
+          </button>
+        )}
+      </div>
 
-      {loading && !data ? (
-        <Spinner />
-      ) : shownIssues.length === 0 ? (
-        <Empty title={openIssues.length === 0 ? `No open issues in ${activeYTKey || 'YouTrack'}` : 'No issues'}>
-          Failed checks, failing jobs, and expiring secrets automatically open tickets here, or click <b>New issue</b> to create one.
+      <ErrorBox error={error} />
+
+      {allLinks.length === 0 ? (
+        <Empty title="No tickets raised from Rexus yet">
+          When a health check goes down, a job fails, or a secret is about to expire, Rexus automatically creates and tracks the YouTrack ticket here — or click <b>New issue</b> to raise one manually.
+        </Empty>
+      ) : shown.length === 0 ? (
+        <Empty title={stateFilter === 'open' && openLinks.length === 0 ? 'All raised tickets are resolved' : 'No tickets match these filters'}>
+          {stateFilter === 'open' && resolvedLinks.length > 0 ? (
+            <button type="button" onClick={() => setParam('state', 'all')} className="text-emerald-400 hover:underline">
+              Show all {allLinks.length} tickets (including resolved)
+            </button>
+          ) : (
+            <button type="button" onClick={clearFilters} className="text-emerald-400 hover:underline">
+              Clear filters
+            </button>
+          )}
         </Empty>
       ) : (
         <Card className="overflow-x-auto">
-          <table className="w-full min-w-[600px] text-left text-sm">
+          <table className="w-full min-w-[760px] text-left text-sm">
             <thead className="border-b border-zinc-800 text-xs text-zinc-500">
               <tr>
-                <th className="px-4 py-2 font-medium">Issue</th>
-                <th className="px-4 py-2 font-medium">State</th>
-                <th className="px-4 py-2 font-medium">Priority</th>
-                <th className="px-4 py-2 font-medium">Assignee</th>
-                <th className="px-4 py-2 text-right font-medium">Updated</th>
+                <th className="px-4 py-2.5 font-medium">Ticket</th>
+                <th className="px-4 py-2.5 font-medium">Triggered by</th>
+                <th className="px-4 py-2.5 font-medium">Project</th>
+                <th className="px-4 py-2.5 font-medium">State</th>
+                <th className="px-4 py-2.5 font-medium">Priority</th>
+                <th className="px-4 py-2.5 font-medium">Assignee</th>
+                <th className="px-4 py-2.5 text-right font-medium">Updated</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/70">
-              {shownIssues.slice(0, 15).map((iss) => (
-                <tr key={iss.id} className="hover:bg-zinc-800/30">
+              {shown.map((l) => (
+                <tr key={l.id} className="hover:bg-zinc-800/30">
                   <td className="max-w-md px-4 py-2.5">
                     <a
-                      href={iss.url}
+                      href={l.issue_url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="group flex items-center gap-2"
                     >
-                      <span className={cx('mono shrink-0 text-xs font-semibold', iss.resolved ? 'text-zinc-500 line-through' : 'text-sky-400 group-hover:underline')}>
-                        {iss.idReadable}
+                      <span
+                        className={cx(
+                          'mono shrink-0 text-xs font-semibold',
+                          l.resolved ? 'text-zinc-500 line-through' : 'text-sky-400 group-hover:underline',
+                        )}
+                      >
+                        {l.issue_readable}
                       </span>
-                      <span className={cx('truncate', iss.resolved ? 'text-zinc-500' : 'text-zinc-100 group-hover:underline')}>
-                        {iss.summary}
+                      <span className={cx('truncate font-medium', l.resolved ? 'text-zinc-500' : 'text-zinc-100 group-hover:underline')}>
+                        {l.summary}
                       </span>
                       <span className="shrink-0 text-zinc-500 opacity-0 transition group-hover:opacity-100">
                         <NavIcon name="external" size={12} />
@@ -387,16 +557,34 @@ export function ProjectYouTrackSection({
                     </a>
                   </td>
                   <td className="px-4 py-2.5">
-                    <Badge tone={stateTone(iss.state, iss.resolved != null)}>{iss.state}</Badge>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge tone={l.resource_type === 'manual' ? 'zinc' : 'sky'}>{SOURCE_LABEL[l.resource_type]}</Badge>
+                      {l.resource_name && (
+                        <Link to={sourceLink(l)} className="truncate text-xs text-zinc-300 hover:text-zinc-100 hover:underline">
+                          {l.resource_name}
+                        </Link>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-2.5">
-                    {iss.priority ? <Badge tone={priorityTone(iss.priority)}>{iss.priority}</Badge> : <span className="text-xs text-zinc-600">—</span>}
+                    <div className="flex items-center gap-1.5">
+                      <Link to={`/projects/${l.project_key}`} className="text-zinc-300 hover:text-zinc-100 hover:underline">
+                        {l.project_name || l.project_key}
+                      </Link>
+                      <span className="mono text-xs text-zinc-500">({l.yt_project_key})</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <Badge tone={stateTone(l.state, l.resolved)}>{l.state || (l.resolved ? 'Done' : 'Open')}</Badge>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    {l.priority ? <Badge tone={priorityTone(l.priority)}>{l.priority}</Badge> : <span className="text-xs text-zinc-600">—</span>}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-zinc-300">
-                    {iss.assignee ? `@${iss.assignee}` : <span className="text-zinc-600">Unassigned</span>}
+                    {l.assignee ? `@${l.assignee}` : <span className="text-zinc-600">Unassigned</span>}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-zinc-500">
-                    {iss.updated ? timeAgo(new Date(iss.updated).toISOString()) : '—'}
+                  <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-zinc-500" title={`Created ${fmtTime(l.created_at)} · Updated ${fmtTime(l.updated_at)}`}>
+                    {timeAgo(l.updated_at)}
                   </td>
                 </tr>
               ))}
@@ -408,10 +596,10 @@ export function ProjectYouTrackSection({
       {creating && (
         <CreateYouTrackIssueModal
           prefill={{
-            projectKey: project.key,
-            ytProjectKey: activeYTKey,
-            summary: `[${project.name}] `,
-            description: `Created from Rexus project **${project.name}** (\`${project.key}\`).\n`,
+            projectKey: projectFilter || '',
+            projects,
+            summary: '',
+            description: '',
             priority: 'Normal',
             resourceType: 'manual',
           }}
@@ -422,6 +610,6 @@ export function ProjectYouTrackSection({
           }}
         />
       )}
-    </section>
+    </>
   )
 }

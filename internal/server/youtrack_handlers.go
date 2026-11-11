@@ -36,6 +36,9 @@ func (s *Server) handleYouTrackStatus(w http.ResponseWriter, r *http.Request, a 
 }
 
 func (s *Server) handleListYouTrackLinks(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	if r.URL.Query().Get("sync") == "1" {
+		s.alerts.RefreshOpenLinks(r.Context())
+	}
 	projID := ""
 	if pKey := strings.TrimSpace(r.URL.Query().Get("project")); pKey != "" {
 		p, err := s.store.ProjectByKeyFor(r.Context(), s.access(r), pKey)
@@ -47,6 +50,16 @@ func (s *Server) handleListYouTrackLinks(w http.ResponseWriter, r *http.Request,
 	}
 	onlyUnresolved := r.URL.Query().Get("unresolved") != "0"
 	links, err := s.store.ListYouTrackLinks(r.Context(), s.access(r), projID, onlyUnresolved, 200)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"links": links})
+}
+
+func (s *Server) handleSyncYouTrackLinks(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	s.alerts.RefreshOpenLinks(r.Context())
+	links, err := s.store.ListYouTrackLinks(r.Context(), s.access(r), "", false, 200)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
