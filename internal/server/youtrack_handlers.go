@@ -1,8 +1,11 @@
 package server
 
 import (
+	"context"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"rexus/internal/alerts"
 	"rexus/internal/store"
@@ -36,11 +39,9 @@ func (s *Server) handleYouTrackStatus(w http.ResponseWriter, r *http.Request, a 
 }
 
 func (s *Server) handleListYouTrackLinks(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	if r.URL.Query().Get("sync") == "1" {
-		s.alerts.RefreshOpenLinks(r.Context())
-	}
 	projID := ""
-	if pKey := strings.TrimSpace(r.URL.Query().Get("project")); pKey != "" {
+	pKey := strings.TrimSpace(r.URL.Query().Get("project"))
+	if pKey != "" {
 		p, err := s.store.ProjectByKeyFor(r.Context(), s.access(r), pKey)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"links": []*store.YouTrackLink{}})
@@ -49,22 +50,132 @@ func (s *Server) handleListYouTrackLinks(w http.ResponseWriter, r *http.Request,
 		projID = p.ID
 	}
 	onlyUnresolved := r.URL.Query().Get("unresolved") != "0"
+	includeYT := r.URL.Query().Get("include_youtrack") == "1"
+
+	var liveIssues []alerts.YTIssue
+	if includeYT {
+		liveIssues, _ = s.alerts.FetchAllIssues(r.Context())
+	} else if r.URL.Query().Get("sync") == "1" {
+		s.alerts.RefreshOpenLinks(r.Context())
+	}
+
 	links, err := s.store.ListYouTrackLinks(r.Context(), s.access(r), projID, onlyUnresolved, 200)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
+	if includeYT && len(liveIssues) > 0 {
+		links = s.mergeLiveYouTrackIssues(r.Context(), a, s.access(r), links, liveIssues, pKey, onlyUnresolved)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links})
 }
 
 func (s *Server) handleSyncYouTrackLinks(w http.ResponseWriter, r *http.Request, a *authCtx) {
-	s.alerts.RefreshOpenLinks(r.Context())
+	liveIssues, _ := s.alerts.FetchAllIssues(r.Context())
 	links, err := s.store.ListYouTrackLinks(r.Context(), s.access(r), "", false, 200)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
+	if len(liveIssues) > 0 {
+		links = s.mergeLiveYouTrackIssues(r.Context(), a, s.access(r), links, liveIssues, "", false)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": links})
+}
+
+func (s *Server) mergeLiveYouTrackIssues(ctx context.Context, a *authCtx, access store.Access, links []*store.YouTrackLink, liveIssues []alerts.YTIssue, filterProjKey string, onlyUnresolved bool) []*store.YouTrackLink {
+	seen := make(map[string]bool, len(links)*2)
+	for _, l := range links {
+		seen[l.IssueID] = true
+		seen[l.IssueReadable] = true
+	}
+
+	projects, _ := s.store.ListProjectsFor(ctx, access)
+	matchProject := func(ytShort, ytName string) *store.Project {
+		for _, p := range projects {
+			if p.YouTrackProjectKey != nil && strings.EqualFold(*p.YouTrackProjectKey, ytShort) {
+				return p
+			}
+		}
+		for _, p := range projects {
+			if strings.EqualFold(p.Key, ytShort) || strings.EqualFold(p.Name, ytName) || strings.EqualFold(p.Key, ytName) {
+				return p
+			}
+		}
+		return nil
+	}
+
+	isAdminUser := a != nil && (a.user.Role == "owner" || a.user.Role == "admin")
+	for _, iss := range liveIssues {
+		if seen[iss.ID] || seen[iss.IDReadable] {
+			continue
+		}
+		resolved := iss.Resolved != nil
+		if onlyUnresolved && resolved {
+			continue
+		}
+		ytShort := iss.ProjectShortName
+		if ytShort == "" {
+			if idx := strings.IndexByte(iss.IDReadable, '-'); idx > 0 {
+				ytShort = iss.IDReadable[:idx]
+			}
+		}
+		p := matchProject(ytShort, iss.ProjectName)
+		if p == nil && !isAdminUser {
+			// Non-admin users only see YouTrack tickets mapped to projects they have access to.
+			continue
+		}
+		projID, projKey, projName := "", "", iss.ProjectName
+		if p != nil {
+			projID, projKey, projName = p.ID, p.Key, p.Name
+		}
+		if filterProjKey != "" && !strings.EqualFold(projKey, filterProjKey) {
+			continue
+		}
+		var prio, ass *string
+		if iss.Priority != "" {
+			pr := iss.Priority
+			prio = &pr
+		}
+		if iss.Assignee != "" {
+			as := iss.Assignee
+			ass = &as
+		}
+		created := time.Now()
+		if iss.Created > 0 {
+			created = time.UnixMilli(iss.Created)
+		}
+		updated := created
+		if iss.Updated > 0 {
+			updated = time.UnixMilli(iss.Updated)
+		}
+		links = append(links, &store.YouTrackLink{
+			ID:            "yt:" + iss.ID,
+			ProjectID:     projID,
+			ProjectKey:    projKey,
+			ProjectName:   projName,
+			ResourceType:  "youtrack",
+			YTProjectKey:  ytShort,
+			IssueID:       iss.ID,
+			IssueReadable: iss.IDReadable,
+			IssueURL:      iss.URL,
+			Summary:       iss.Summary,
+			State:         iss.State,
+			Priority:      prio,
+			Assignee:      ass,
+			Resolved:      resolved,
+			CreatedAt:     created,
+			UpdatedAt:     updated,
+		})
+	}
+
+	sort.SliceStable(links, func(i, j int) bool {
+		if links[i].Resolved != links[j].Resolved {
+			return !links[i].Resolved
+		}
+		return links[i].UpdatedAt.After(links[j].UpdatedAt)
+	})
+	return links
 }
 
 func (s *Server) handleProjectYouTrackIssues(w http.ResponseWriter, r *http.Request, a *authCtx) {

@@ -25,17 +25,19 @@ type YTProject struct {
 
 // YTIssue describes a YouTrack issue returned from /api/issues.
 type YTIssue struct {
-	ID         string `json:"id"`
-	IDReadable string `json:"idReadable"`
-	Summary    string `json:"summary"`
-	Resolved   *int64 `json:"resolved"`
-	Created    int64  `json:"created"`
-	Updated    int64  `json:"updated"`
-	URL        string `json:"url"`
-	State      string `json:"state"`
-	Priority   string `json:"priority"`
-	Assignee   string `json:"assignee"`
-	Type       string `json:"type"`
+	ID               string `json:"id"`
+	IDReadable       string `json:"idReadable"`
+	Summary          string `json:"summary"`
+	Resolved         *int64 `json:"resolved"`
+	Created          int64  `json:"created"`
+	Updated          int64  `json:"updated"`
+	URL              string `json:"url"`
+	State            string `json:"state"`
+	Priority         string `json:"priority"`
+	Assignee         string `json:"assignee"`
+	Type             string `json:"type"`
+	ProjectShortName string `json:"project_short_name,omitempty"`
+	ProjectName      string `json:"project_name,omitempty"`
 }
 
 // YTIssueCreateInput holds inputs for manually creating a YouTrack issue from Rexus.
@@ -482,6 +484,53 @@ func (s *Service) FetchProjectIssues(ctx context.Context, rexusProjectID, ytProj
 	return issues, nil
 }
 
+// FetchAllIssues queries recent issues across YouTrack and syncs any matching youtrack_links in the DB.
+func (s *Service) FetchAllIssues(ctx context.Context) ([]YTIssue, error) {
+	cfg, _, err := s.ActiveYouTrackConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(cfg.YouTrackURL, "/") +
+		"/api/issues?fields=id,idReadable,summary,resolved,created,updated,project(shortName,name),customFields(name,value(name,login,fullName))&$top=100"
+	status, body, err := s.ytRequest(ctx, http.MethodGet, endpoint, cfg.YouTrackToken, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK {
+		return nil, ytAPIError(status, body)
+	}
+	var raw []rawYTIssue
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	baseURL := strings.TrimRight(cfg.YouTrackURL, "/")
+	issues := make([]YTIssue, 0, len(raw))
+	byID := map[string]YTIssue{}
+	for _, r := range raw {
+		iss := r.toYTIssue(baseURL)
+		issues = append(issues, iss)
+		byID[iss.ID] = iss
+		byID[iss.IDReadable] = iss
+	}
+	if links, err := s.store.ListYouTrackLinks(ctx, store.Access{}, "", false, 200); err == nil {
+		for _, l := range links {
+			if live, ok := byID[l.IssueID]; ok {
+				var prio, ass *string
+				if live.Priority != "" {
+					p := live.Priority
+					prio = &p
+				}
+				if live.Assignee != "" {
+					a := live.Assignee
+					ass = &a
+				}
+				_ = s.store.UpdateYouTrackLinkStatus(ctx, l.ID, live.Summary, live.State, prio, ass, live.Resolved != nil)
+			}
+		}
+	}
+	return issues, nil
+}
+
 // RefreshOpenLinks syncs all unresolved youtrack_links in the database against YouTrack.
 func (s *Service) RefreshOpenLinks(ctx context.Context) {
 	cfg, _, err := s.ActiveYouTrackConfig(ctx)
@@ -518,12 +567,16 @@ func (s *Service) RefreshOpenLinks(ctx context.Context) {
 }
 
 type rawYTIssue struct {
-	ID           string `json:"id"`
-	IDReadable   string `json:"idReadable"`
-	Summary      string `json:"summary"`
-	Resolved     *int64 `json:"resolved"`
-	Created      int64  `json:"created"`
-	Updated      int64  `json:"updated"`
+	ID         string `json:"id"`
+	IDReadable string `json:"idReadable"`
+	Summary    string `json:"summary"`
+	Resolved   *int64 `json:"resolved"`
+	Created    int64  `json:"created"`
+	Updated    int64  `json:"updated"`
+	Project    *struct {
+		ShortName string `json:"shortName"`
+		Name      string `json:"name"`
+	} `json:"project"`
 	CustomFields []struct {
 		Name  string          `json:"name"`
 		Value json.RawMessage `json:"value"`
@@ -540,6 +593,10 @@ func (r rawYTIssue) toYTIssue(baseURL string) YTIssue {
 		Updated:    r.Updated,
 		URL:        baseURL + "/issue/" + r.IDReadable,
 		State:      "Open",
+	}
+	if r.Project != nil {
+		iss.ProjectShortName = r.Project.ShortName
+		iss.ProjectName = r.Project.Name
 	}
 	for _, cf := range r.CustomFields {
 		if len(cf.Value) == 0 || string(cf.Value) == "null" {

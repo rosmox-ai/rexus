@@ -71,7 +71,8 @@ const SOURCE_LABEL: Record<YouTrackLink['resource_type'], string> = {
   job: 'Job',
   secret: 'Secret',
   ssl: 'SSL cert',
-  manual: 'Manual',
+  manual: 'Manual (Rexus)',
+  youtrack: 'YouTrack',
 }
 
 function sourceLink(l: YouTrackLink): string {
@@ -304,7 +305,7 @@ export function TicketsPage() {
   const load = useCallback(async () => {
     try {
       const [l, p] = await Promise.all([
-        api<{ links: YouTrackLink[] }>('/api/youtrack/links?unresolved=0'),
+        api<{ links: YouTrackLink[] }>('/api/youtrack/links?unresolved=0&include_youtrack=1'),
         api<{ projects: Project[] }>('/api/projects'),
       ])
       setLinks(l.links ?? [])
@@ -345,7 +346,10 @@ export function TicketsPage() {
       }),
     [openLinks],
   )
-  const autoRaisedOpen = useMemo(() => openLinks.filter((l) => l.resource_type !== 'manual'), [openLinks])
+  const autoRaisedOpen = useMemo(
+    () => openLinks.filter((l) => l.resource_type !== 'manual' && l.resource_type !== 'youtrack'),
+    [openLinks],
+  )
 
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -353,9 +357,13 @@ export function TicketsPage() {
       if (stateFilter === 'open' && l.resolved) return false
       if (stateFilter === 'resolved' && !l.resolved) return false
       if (projectFilter && l.project_key !== projectFilter) return false
-      if (sourceFilter && l.resource_type !== sourceFilter) return false
+      if (sourceFilter === 'rexus') {
+        if (l.resource_type === 'youtrack') return false
+      } else if (sourceFilter && l.resource_type !== sourceFilter) {
+        return false
+      }
       if (needle) {
-        const hay = `${l.issue_readable} ${l.summary} ${l.project_name} ${l.project_key} ${l.resource_name ?? ''} ${l.assignee ?? ''} ${l.state}`.toLowerCase()
+        const hay = `${l.issue_readable} ${l.summary} ${l.project_name} ${l.project_key} ${l.yt_project_key} ${l.resource_name ?? ''} ${l.assignee ?? ''} ${l.state}`.toLowerCase()
         if (!hay.includes(needle)) return false
       }
       return true
@@ -371,7 +379,7 @@ export function TicketsPage() {
     <>
       <PageHeader
         title="Tickets"
-        subtitle="Centralized view of all YouTrack issues raised from Rexus across your projects."
+        subtitle="Centralized view of all YouTrack issues across your projects — raised from Rexus or created in YouTrack."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {status?.base_url && (
@@ -485,11 +493,13 @@ export function TicketsPage() {
           className="w-auto!"
         >
           <option value="">All sources</option>
+          <option value="rexus">Raised by Rexus (all)</option>
+          <option value="youtrack">Created in YouTrack</option>
           <option value="check">Health check</option>
           <option value="job">Job</option>
           <option value="secret">Expiring secret</option>
           <option value="ssl">SSL certificate</option>
-          <option value="manual">Manual</option>
+          <option value="manual">Manual (Rexus)</option>
         </Select>
         {filtered && (
           <button type="button" onClick={clearFilters} className="text-sm text-zinc-400 hover:text-zinc-200 hover:underline">
@@ -558,7 +568,9 @@ export function TicketsPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge tone={l.resource_type === 'manual' ? 'zinc' : 'sky'}>{SOURCE_LABEL[l.resource_type]}</Badge>
+                      <Badge tone={l.resource_type === 'manual' || l.resource_type === 'youtrack' ? 'zinc' : 'sky'}>
+                        {SOURCE_LABEL[l.resource_type]}
+                      </Badge>
                       {l.resource_name && (
                         <Link to={sourceLink(l)} className="truncate text-xs text-zinc-300 hover:text-zinc-100 hover:underline">
                           {l.resource_name}
@@ -568,10 +580,14 @@ export function TicketsPage() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1.5">
-                      <Link to={`/projects/${l.project_key}`} className="text-zinc-300 hover:text-zinc-100 hover:underline">
-                        {l.project_name || l.project_key}
-                      </Link>
-                      <span className="mono text-xs text-zinc-500">({l.yt_project_key})</span>
+                      {l.project_key ? (
+                        <Link to={`/projects/${l.project_key}`} className="text-zinc-300 hover:text-zinc-100 hover:underline">
+                          {l.project_name || l.project_key}
+                        </Link>
+                      ) : (
+                        <span className="text-zinc-300">{l.project_name || l.yt_project_key}</span>
+                      )}
+                      {l.yt_project_key && <span className="mono text-xs text-zinc-500">({l.yt_project_key})</span>}
                     </div>
                   </td>
                   <td className="px-4 py-2.5">

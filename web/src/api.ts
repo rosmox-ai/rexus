@@ -329,7 +329,7 @@ export interface YouTrackLink {
   project_id: string
   project_key: string
   project_name: string
-  resource_type: 'check' | 'job' | 'secret' | 'ssl' | 'manual'
+  resource_type: 'check' | 'job' | 'secret' | 'ssl' | 'manual' | 'youtrack'
   resource_id: string | null
   resource_name: string | null
   dedupe_key: string | null
