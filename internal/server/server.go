@@ -220,6 +220,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/alerts/events/{key}", s.authed(s.handleUpdateAlertEvent))
 	mux.HandleFunc("GET /api/alerts/history", s.authed(s.handleAlertHistory))
 
+	// YouTrack integration
+	mux.HandleFunc("GET /api/youtrack/status", s.authed(s.handleYouTrackStatus))
+	mux.HandleFunc("GET /api/youtrack/links", s.authed(s.handleListYouTrackLinks))
+	mux.HandleFunc("GET /api/projects/{key}/youtrack/issues", s.authed(s.handleProjectYouTrackIssues))
+	mux.HandleFunc("POST /api/projects/{key}/youtrack/issues", s.authed(s.handleCreateYouTrackIssue))
+
 	mux.HandleFunc("GET /api/projects", s.authed(s.handleListProjects))
 	mux.HandleFunc("POST /api/projects", s.authed(s.handleCreateProject))
 	mux.HandleFunc("GET /api/projects/{key}", s.authed(s.handleGetProject))

@@ -81,6 +81,7 @@ export interface Project {
   health_status: HealthStatus | 'none'
   check_count: number
   service_count: number
+  youtrack_project_key: string | null
 }
 
 /** An optional group inside a project (frontend, backend, worker…). Organization only — not access control. */
@@ -286,7 +287,7 @@ export interface BackupRow {
   finished_at: string | null
 }
 
-export type ChannelType = 'telegram' | 'discord' | 'slack' | 'email'
+export type ChannelType = 'telegram' | 'discord' | 'slack' | 'email' | 'youtrack'
 
 export interface AlertChannel {
   id: string
@@ -297,6 +298,49 @@ export interface AlertChannel {
   created_at: string
   command_chat_id?: string
   digest?: { time: string; timezone: string }
+  youtrack_url?: string
+  youtrack_project?: string
+  auto_resolve?: boolean
+}
+
+export interface YouTrackProject {
+  id: string
+  name: string
+  shortName: string
+  archived: boolean
+}
+
+export interface YouTrackIssue {
+  id: string
+  idReadable: string
+  summary: string
+  resolved: number | null
+  created: number
+  updated: number
+  url: string
+  state: string
+  priority: string
+  assignee: string
+  type: string
+}
+
+export interface YouTrackLink {
+  id: string
+  project_id: string
+  resource_type: 'check' | 'job' | 'secret' | 'ssl' | 'manual'
+  resource_id: string | null
+  dedupe_key: string | null
+  yt_project_key: string
+  issue_id: string
+  issue_readable: string
+  issue_url: string
+  summary: string
+  state: string
+  priority: string | null
+  assignee: string | null
+  resolved: boolean
+  created_at: string
+  updated_at: string
 }
 
 export interface AlertEventState {

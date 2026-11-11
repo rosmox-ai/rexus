@@ -9,15 +9,16 @@ import (
 )
 
 type Project struct {
-	ID          string    `json:"id"`
-	Key         string    `json:"key"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	WebsiteURL  *string   `json:"website_url"` // where the project lives, for quick access
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	JobCount    int       `json:"job_count"`
-	FailingJobs int       `json:"failing_jobs"`
+	ID                 string    `json:"id"`
+	Key                string    `json:"key"`
+	Name               string    `json:"name"`
+	Description        string    `json:"description"`
+	WebsiteURL         *string   `json:"website_url"`          // where the project lives, for quick access
+	YouTrackProjectKey *string   `json:"youtrack_project_key"` // mapped YouTrack project shortName (e.g. VID, DEMO)
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	JobCount           int       `json:"job_count"`
+	FailingJobs        int       `json:"failing_jobs"`
 	// Worst status among the project's enabled health checks:
 	// down > degraded > up; "unknown" until a probe has run; "none" without checks.
 	HealthStatus string `json:"health_status"`
@@ -41,7 +42,7 @@ func NormalizeProjectKey(key string) (string, error) {
 	return key, nil
 }
 
-const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.website_url, p.created_at, p.updated_at,
+const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.website_url, p.youtrack_project_key, p.created_at, p.updated_at,
 	(SELECT count(*) FROM jobs j WHERE j.project_id = p.id),
 	(SELECT count(*) FROM jobs j WHERE j.project_id = p.id AND j.enabled AND j.last_status = 'failed'),
 	COALESCE((SELECT CASE WHEN bool_or(c.status = 'down') THEN 'down'
@@ -55,7 +56,7 @@ const projectSelect = `SELECT p.id, p.key, p.name, p.description, p.website_url,
 
 func scanProject(row interface{ Scan(...any) error }) (*Project, error) {
 	p := &Project{}
-	err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Description, &p.WebsiteURL, &p.CreatedAt, &p.UpdatedAt, &p.JobCount, &p.FailingJobs,
+	err := row.Scan(&p.ID, &p.Key, &p.Name, &p.Description, &p.WebsiteURL, &p.YouTrackProjectKey, &p.CreatedAt, &p.UpdatedAt, &p.JobCount, &p.FailingJobs,
 		&p.HealthStatus, &p.CheckCount, &p.ServiceCount, &p.OwnerOnly)
 	if err != nil {
 		return nil, notFound(err)
@@ -93,7 +94,7 @@ func (s *Store) CreateProject(ctx context.Context, key, name, description string
 
 	var id string
 	err = tx.QueryRow(ctx, `INSERT INTO projects (key, name, description, website_url, created_by)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`, key, name, description, websiteURL, createdBy).Scan(&id)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, key, name, description, websiteURL, nullIfEmpty(createdBy)).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -126,6 +127,11 @@ func (s *Store) UpdateProject(ctx context.Context, id, key, name, description st
 		return nil, ErrNotFound
 	}
 	return s.ProjectByKey(ctx, key)
+}
+
+func (s *Store) SetProjectYouTrackKey(ctx context.Context, projectID string, ytKey *string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE projects SET youtrack_project_key = $2, updated_at = now() WHERE id = $1`, projectID, ytKey)
+	return err
 }
 
 func (s *Store) DeleteProject(ctx context.Context, id string) error {

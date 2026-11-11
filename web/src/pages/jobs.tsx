@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, canWrite, type Job, type JobRun, type Project } from '../api'
 import { useAuth } from '../auth'
 import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, useEnvironments, useServices } from './services'
+import { CreateYouTrackIssueModal, useYouTrackLinks, useYouTrackStatus, YouTrackBadge, type IssuePrefill } from './youtrack'
 import {
   Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, Textarea, cx, fmtTime, timeAgo,
 } from '../ui'
@@ -16,6 +17,7 @@ const PRESETS: [string, string][] = [
 ]
 
 export function JobTable({ jobs, showProject = true, showUrl = true }: { jobs: Job[]; showProject?: boolean; showUrl?: boolean }) {
+  const { forResource } = useYouTrackLinks()
   return (
     <Card className="overflow-x-auto">
       <table className="w-full min-w-[640px] text-sm">
@@ -32,13 +34,16 @@ export function JobTable({ jobs, showProject = true, showUrl = true }: { jobs: J
           {jobs.map((j) => (
             <tr key={j.id} className="hover:bg-zinc-800/30">
               <td className="px-4 py-2.5">
-                <Link to={`/jobs/${j.id}`} className="flex items-center gap-2">
-                  <StatusDot status={j.enabled ? j.last_status : 'disabled'} />
-                  <span className="font-medium text-zinc-100 hover:underline">{j.name}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link to={`/jobs/${j.id}`} className="flex items-center gap-2">
+                    <StatusDot status={j.enabled ? j.last_status : 'disabled'} />
+                    <span className="font-medium text-zinc-100 hover:underline">{j.name}</span>
+                  </Link>
                   {!j.enabled && <Badge>paused</Badge>}
+                  <YouTrackBadge link={forResource('job', j.id)} />
                   <ServiceBadge r={j} />
                   <EnvBadge env={j.environment} />
-                </Link>
+                </div>
                 {showUrl && (
                   <div className="ml-4.5 mt-0.5 max-w-xs truncate text-xs text-zinc-500 mono">
                     {j.config.method} {j.config.url}
@@ -307,7 +312,10 @@ export function JobDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  const [ytPrefill, setYtPrefill] = useState<IssuePrefill | null>(null)
   const writable = !!user && canWrite(user.role)
+  const { status: ytStatus } = useYouTrackStatus()
+  const { forResource, reload: reloadYT } = useYouTrackLinks()
 
   const load = useCallback(async () => {
     try {
@@ -390,10 +398,11 @@ export function JobDetailPage() {
           { label: job.name },
         ]}
         title={
-          <span className="flex items-center gap-2.5">
+          <span className="flex flex-wrap items-center gap-2.5">
             <StatusDot status={job.enabled ? job.last_status : 'disabled'} />
             {job.name}
             {!job.enabled && <Badge>paused</Badge>}
+            <YouTrackBadge link={forResource('job', job.id)} />
           </span>
         }
         subtitle={
@@ -407,6 +416,32 @@ export function JobDetailPage() {
           writable && (
             <>
               <Button onClick={runNow} disabled={running}>{running ? 'Running…' : 'Run now'}</Button>
+              {ytStatus?.configured && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const latest = runs[0]
+                    setYtPrefill({
+                      projectKey: job.project_key,
+                      summary: `[Job ${job.last_status === 'failed' ? 'FAILED' : 'Issue'}] ${job.project_name}: ${job.name}`,
+                      description: [
+                        `### Scheduled Job: ${job.name}`,
+                        `- **Project:** \`${job.project_key}\`${job.service_key ? ` / \`${job.service_key}\`` : ''}`,
+                        `- **Request:** \`${job.config.method} ${job.config.url}\``,
+                        `- **Schedule:** \`${job.schedule}\``,
+                        latest?.status_code != null ? `- **HTTP Status:** ${latest.status_code}` : '',
+                        latest?.error ? `- **Error:** ${latest.error}` : '',
+                        latest?.response_snippet ? `\n#### Response Snippet\n\`\`\`\n${latest.response_snippet}\n\`\`\`` : '',
+                      ].filter(Boolean).join('\n'),
+                      priority: job.last_status === 'failed' ? 'Critical' : 'Normal',
+                      resourceType: 'job',
+                      resourceId: job.id,
+                    })
+                  }}
+                >
+                  Create issue
+                </Button>
+              )}
               <Button variant="secondary" onClick={toggle}>{job.enabled ? 'Pause' : 'Resume'}</Button>
               <Link to={`/jobs/${job.id}/edit`}><Button variant="secondary">Edit</Button></Link>
               <Button variant="danger" onClick={remove}>Delete</Button>
@@ -447,6 +482,16 @@ export function JobDetailPage() {
             </tbody>
           </table>
         </Card>
+      )}
+      {ytPrefill && (
+        <CreateYouTrackIssueModal
+          prefill={ytPrefill}
+          onClose={() => setYtPrefill(null)}
+          onCreated={() => {
+            setYtPrefill(null)
+            reloadYT()
+          }}
+        />
       )}
     </>
   )

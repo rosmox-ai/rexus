@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, PageHeader, Select, Spinner, StatusDot, cx, fmtTime, timeAgo } from '../ui'
 import { fmtDuration, responseStats, UptimeBar } from './charts'
 import { EnvBadge, EnvironmentSelect, ServiceBadge, ServiceSelect, serviceQuery, useEnvironments, useServices } from './services'
+import { CreateYouTrackIssueModal, useYouTrackLinks, useYouTrackStatus, YouTrackBadge } from './youtrack'
 
 // ───────────────────────── helpers ─────────────────────────
 
@@ -61,6 +62,7 @@ export function ProjectChecks({ project, services, scope }: { project: Project; 
   const writable = !!user && canWrite(user.role)
   const [checks, setChecks] = useState<HealthCheck[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const { forResource } = useYouTrackLinks(project.key)
 
   const load = useCallback(() => {
     api<{ checks: HealthCheck[] }>(`/api/projects/${encodeURIComponent(project.key)}/checks${serviceQuery(scope, '?')}`)
@@ -99,6 +101,7 @@ export function ProjectChecks({ project, services, scope }: { project: Project; 
                       <StatusDot status={c.enabled ? c.status : 'disabled'} />
                       <span className="truncate font-medium text-zinc-100">{c.name}</span>
                       <HealthBadge status={c.status} paused={!c.enabled} />
+                      <YouTrackBadge link={forResource('check', c.id) ?? forResource('ssl', c.id)} />
                       {services.length > 0 && !scope && <ServiceBadge r={c} />}
                       <EnvBadge env={c.environment} />
                     </div>
@@ -348,6 +351,9 @@ export function CheckDetailPage() {
   const [day, setDay] = useState<Series | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [creatingYT, setCreatingYT] = useState(false)
+  const { status: ytStatus } = useYouTrackStatus()
+  const { forResource, reload: reloadYT } = useYouTrackLinks()
 
   const load = useCallback(async () => {
     try {
@@ -418,10 +424,11 @@ export function CheckDetailPage() {
           { label: c.name },
         ]}
         title={
-          <span className="flex items-center gap-2.5">
+          <span className="flex flex-wrap items-center gap-2.5">
             <StatusDot status={c.enabled ? c.status : 'disabled'} />
             {c.name}
             <HealthBadge status={c.status} paused={!c.enabled} />
+            <YouTrackBadge link={forResource('check', c.id) ?? forResource('ssl', c.id)} />
           </span>
         }
         subtitle={
@@ -435,6 +442,9 @@ export function CheckDetailPage() {
           writable && (
             <>
               <Button onClick={runNow} disabled={running} className="px-3 py-1.5">{running ? 'Checking…' : 'Check now'}</Button>
+              {ytStatus?.configured && (
+                <Button variant="secondary" onClick={() => setCreatingYT(true)} className="px-3 py-1.5">Create issue</Button>
+              )}
               <Button variant="secondary" onClick={toggle} className="px-3 py-1.5">{c.enabled ? 'Pause' : 'Resume'}</Button>
               <Link to={`/checks/${c.id}/edit`}><Button variant="secondary" className="px-3 py-1.5">Edit</Button></Link>
               <ActionMenu items={[{ label: 'Delete check', onClick: remove, danger: true }]} />
@@ -521,6 +531,32 @@ export function CheckDetailPage() {
           </Card>
         </section>
       </div>
+
+      {creatingYT && (
+        <CreateYouTrackIssueModal
+          prefill={{
+            projectKey: c.project_key,
+            summary: `[Check ${c.status.toUpperCase()}] ${c.project_name}: ${c.name}`,
+            description: [
+              `### Health Check: ${c.name}`,
+              `- **Project:** \`${c.project_key}\`${c.service_key ? ` / \`${c.service_key}\`` : ''}`,
+              `- **URL:** \`${c.method} ${c.url}\``,
+              `- **Status:** ${c.status.toUpperCase()}`,
+              c.last_status_code != null ? `- **Last HTTP Status:** ${c.last_status_code}` : '',
+              c.last_response_ms != null ? `- **Last Response Time:** ${c.last_response_ms} ms` : '',
+              c.last_error ? `- **Error:** ${c.last_error}` : '',
+            ].filter(Boolean).join('\n'),
+            priority: c.status === 'down' ? 'Critical' : c.status === 'degraded' ? 'Major' : 'Normal',
+            resourceType: 'check',
+            resourceId: c.id,
+          }}
+          onClose={() => setCreatingYT(false)}
+          onCreated={() => {
+            setCreatingYT(false)
+            reloadYT()
+          }}
+        />
+      )}
     </>
   )
 }

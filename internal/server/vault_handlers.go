@@ -442,6 +442,9 @@ func (s *Server) handleUpdateSecret(w http.ResponseWriter, r *http.Request, a *a
 	if oldName != updated.Name {
 		details["renamed_from"] = oldName
 	}
+	if nv != nil {
+		s.alerts.SecretRotated(updated)
+	}
 	s.audit(r, a, "secret.update", "secret", updated.ID, details)
 	writeJSON(w, http.StatusOK, map[string]any{"secret": secretView(updated, a)})
 }

@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 import { Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 import { ServiceBadge, ServiceSelect, serviceQuery, useServices } from './services'
 import { BulkAddModal, ConfirmModal, DeleteAllModal } from './bulk_secrets'
+import { CreateYouTrackIssueModal, useYouTrackLinks, useYouTrackStatus, YouTrackBadge, type YouTrackLink } from './youtrack'
 
 export function ExpiryBadge({ secret }: { secret: Pick<Secret, 'expires_on' | 'days_left'> }) {
   if (!secret.expires_on || secret.days_left == null) return <span className="text-xs text-zinc-600">no expiry</span>
@@ -82,6 +83,7 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
   const [deletingAll, setDeletingAll] = useState(false)
   const [addingEnv, setAddingEnv] = useState(false)
   const [newEnv, setNewEnv] = useState('')
+  const { forResource, reload: reloadYT } = useYouTrackLinks(project.key)
 
   const loadEnvs = useCallback(
     async (select?: string) => {
@@ -224,7 +226,17 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
           ) : (
             <div className="space-y-2">
               {secrets.map((s) => (
-                <SecretRow key={s.id} secret={s} services={services} showService={!scope} writable={writable} onEdit={() => setForm({ existing: s })} onChanged={refresh} />
+                <SecretRow
+                  key={s.id}
+                  secret={s}
+                  services={services}
+                  showService={!scope}
+                  writable={writable}
+                  ytLink={forResource('secret', s.id)}
+                  onYTCreated={reloadYT}
+                  onEdit={() => setForm({ existing: s })}
+                  onChanged={refresh}
+                />
               ))}
             </div>
           )}
@@ -276,8 +288,30 @@ export function ProjectVault({ project, services, scope, onChanged }: { project:
   )
 }
 
-export function SecretRow({ secret, services, showService, showProject, writable, onEdit, onChanged }: { secret: Secret; services: Service[]; showService: boolean; showProject?: boolean; writable: boolean; onEdit: () => void; onChanged: () => void }) {
+export function SecretRow({
+  secret,
+  services,
+  showService,
+  showProject,
+  writable,
+  ytLink,
+  onYTCreated,
+  onEdit,
+  onChanged,
+}: {
+  secret: Secret
+  services: Service[]
+  showService: boolean
+  showProject?: boolean
+  writable: boolean
+  ytLink?: YouTrackLink
+  onYTCreated?: () => void
+  onEdit: () => void
+  onChanged: () => void
+}) {
   const [moving, setMoving] = useState(false)
+  const [creatingYT, setCreatingYT] = useState(false)
+  const { status: ytStatus } = useYouTrackStatus()
   const [value, setValue] = useState<{ text: string; label: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -375,6 +409,7 @@ export function SecretRow({ secret, services, showService, showProject, writable
             <Badge>{secret.environment}</Badge>
             <Badge>v{secret.current_version}</Badge>
             <ExpiryBadge secret={secret} />
+            <YouTrackBadge link={ytLink} />
             {secret.tags.map((t) => (
               <Badge key={t} tone="sky">{t}</Badge>
             ))}
@@ -382,6 +417,15 @@ export function SecretRow({ secret, services, showService, showProject, writable
         </div>
         {writable && (
           <div className="flex items-center gap-0.5">
+            {ytStatus?.configured && !ytLink && (
+              <button
+                className="mr-1 rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:border-sky-600 hover:text-sky-200"
+                title="Create YouTrack rotation task"
+                onClick={() => setCreatingYT(true)}
+              >
+                + YouTrack
+              </button>
+            )}
             {value ? (
               <button className={ib} title="Hide" aria-label="Hide" onClick={() => setValue(null)}><Icon name="eyeoff" /></button>
             ) : (
@@ -459,6 +503,30 @@ export function SecretRow({ secret, services, showService, showProject, writable
           Delete <span className="mono font-medium text-zinc-100">{secret.name}</span>
           {secret.current_version > 1 ? ` and its ${secret.current_version} versions` : ''}? This can’t be undone.
         </ConfirmModal>
+      )}
+      {creatingYT && (
+        <CreateYouTrackIssueModal
+          prefill={{
+            projectKey: secret.project_key,
+            summary: `[Rotate Key] ${secret.project_name}: ${secret.name} (${secret.environment})`,
+            description: [
+              `### Secret Rotation Task: \`${secret.name}\``,
+              `- **Project:** \`${secret.project_key}\`${secret.service_key ? ` / \`${secret.service_key}\`` : ''}`,
+              `- **Environment:** \`${secret.environment}\``,
+              secret.expires_on ? `- **Expires On:** **${secret.expires_on}**` : '',
+              secret.notes ? `- **Notes:** ${secret.notes}` : '',
+            ].filter(Boolean).join('\n'),
+            priority: secret.days_left != null && secret.days_left <= 7 ? 'Critical' : 'Major',
+            dueDate: secret.expires_on ?? '',
+            resourceType: 'secret',
+            resourceId: secret.id,
+          }}
+          onClose={() => setCreatingYT(false)}
+          onCreated={() => {
+            setCreatingYT(false)
+            onYTCreated?.()
+          }}
+        />
       )}
     </Card>
   )

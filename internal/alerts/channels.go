@@ -17,6 +17,7 @@ const (
 	TypeDiscord  = "discord"
 	TypeSlack    = "slack"
 	TypeEmail    = "email"
+	TypeYouTrack = "youtrack"
 )
 
 // Config holds the settings of one channel; only the fields for its type are
@@ -28,6 +29,10 @@ type Config struct {
 	To            []string        `json:"to,omitempty"`              // email
 	CommandChatID *string         `json:"command_chat_id,omitempty"` // Telegram numeric chat ID; empty disables replies
 	Digest        *DigestSchedule `json:"digest,omitempty"`          // Telegram daily digest; empty time disables it
+	YouTrackURL   string          `json:"youtrack_url,omitempty"`    // youtrack base URL
+	YouTrackToken string          `json:"youtrack_token,omitempty"`  // youtrack permanent token
+	YouTrackProj  string          `json:"youtrack_project,omitempty"`// optional default YouTrack project shortName
+	AutoResolve   *bool           `json:"auto_resolve,omitempty"`    // youtrack: resolve linked issue on recovery
 }
 
 type DigestSchedule struct {
@@ -37,7 +42,8 @@ type DigestSchedule struct {
 
 // IsEmpty reports whether no field is set (used to tell "keep the old config" from "replace it").
 func (c *Config) IsEmpty() bool {
-	return c.BotToken == "" && c.ChatID == "" && c.WebhookURL == "" && len(c.To) == 0 && c.CommandChatID == nil && c.Digest == nil
+	return c.BotToken == "" && c.ChatID == "" && c.WebhookURL == "" && len(c.To) == 0 && c.CommandChatID == nil && c.Digest == nil &&
+		c.YouTrackURL == "" && c.YouTrackToken == "" && c.YouTrackProj == "" && c.AutoResolve == nil
 }
 
 var (
@@ -122,8 +128,28 @@ func (c *Config) Validate(typ string, smtpConfigured bool) error {
 		}
 		c.To = clean
 		c.BotToken, c.ChatID, c.WebhookURL = "", "", ""
+		c.YouTrackURL, c.YouTrackToken, c.YouTrackProj, c.AutoResolve = "", "", "", nil
+	case TypeYouTrack:
+		c.YouTrackURL = strings.TrimRight(strings.TrimSpace(c.YouTrackURL), "/")
+		c.YouTrackToken = strings.TrimSpace(c.YouTrackToken)
+		c.YouTrackProj = strings.ToUpper(strings.TrimSpace(c.YouTrackProj))
+		u, err := url.Parse(c.YouTrackURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return errors.New("enter a valid YouTrack base URL (e.g. https://yourteam.youtrack.cloud)")
+		}
+		if len(c.YouTrackToken) < 8 {
+			return errors.New("enter a valid YouTrack permanent token")
+		}
+		if c.AutoResolve == nil {
+			tr := true
+			c.AutoResolve = &tr
+		}
+		c.BotToken, c.ChatID, c.WebhookURL, c.To = "", "", "", nil
 	default:
 		return fmt.Errorf("unknown channel type %q", typ)
+	}
+	if typ != TypeYouTrack {
+		c.YouTrackURL, c.YouTrackToken, c.YouTrackProj, c.AutoResolve = "", "", "", nil
 	}
 	return nil
 }
@@ -153,6 +179,16 @@ func (c *Config) Summary(typ string) string {
 		return u.Hostname() + "/…" + tail
 	case TypeEmail:
 		return strings.Join(c.To, ", ")
+	case TypeYouTrack:
+		u, err := url.Parse(c.YouTrackURL)
+		host := c.YouTrackURL
+		if err == nil && u.Host != "" {
+			host = u.Host
+		}
+		if c.YouTrackProj != "" {
+			return host + " · default " + c.YouTrackProj
+		}
+		return host
 	}
 	return ""
 }

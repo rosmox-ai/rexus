@@ -165,6 +165,7 @@ func cmdServe() error {
 	}
 
 	al := newAlerts(cfg, as, st, keys, log)
+	al.SeedYouTrack(ctx, cfg.YouTrackURL, cfg.YouTrackToken)
 	bk := backup.New(st, log, cfg.DatabaseURL)
 	engine := scheduler.New(st, keys, log, func() bool { return as.Get().ModuleScheduler }, al)
 	srv := server.New(cfg, as, st, keys, engine, al, bk, log, version)

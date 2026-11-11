@@ -53,10 +53,11 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 		return
 	}
 	var in struct {
-		Key         string `json:"key"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		WebsiteURL  string `json:"website_url"`
+		Key                string  `json:"key"`
+		Name               string  `json:"name"`
+		Description        string  `json:"description"`
+		WebsiteURL         string  `json:"website_url"`
+		YouTrackProjectKey *string `json:"youtrack_project_key"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -90,6 +91,12 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 		s.internalError(w, r, err)
 		return
 	}
+	if in.YouTrackProjectKey != nil && strings.TrimSpace(*in.YouTrackProjectKey) != "" {
+		if err := s.store.SetProjectYouTrackKey(r.Context(), p.ID, in.YouTrackProjectKey); err == nil {
+			yt := strings.TrimSpace(*in.YouTrackProjectKey)
+			p.YouTrackProjectKey = &yt
+		}
+	}
 	s.audit(r, a, "project.create", "project", p.ID, map[string]any{"key": p.Key, "name": p.Name})
 	writeJSON(w, http.StatusCreated, map[string]any{"project": p})
 }
@@ -103,11 +110,12 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 		return
 	}
 	var in struct {
-		Key         *string `json:"key"`
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-		WebsiteURL  *string `json:"website_url"` // omitted = unchanged; "" = clear
-		OwnerOnly   *bool   `json:"owner_only"`
+		Key                *string `json:"key"`
+		Name               *string `json:"name"`
+		Description        *string `json:"description"`
+		WebsiteURL         *string `json:"website_url"` // omitted = unchanged; "" = clear
+		OwnerOnly          *bool   `json:"owner_only"`
+		YouTrackProjectKey *string `json:"youtrack_project_key"` // omitted = unchanged; "" = clear
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -151,6 +159,18 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request, a *
 	if err != nil {
 		s.internalError(w, r, err)
 		return
+	}
+	if in.YouTrackProjectKey != nil {
+		if err := s.store.SetProjectYouTrackKey(r.Context(), p.ID, in.YouTrackProjectKey); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		yt := strings.TrimSpace(*in.YouTrackProjectKey)
+		if yt == "" {
+			updated.YouTrackProjectKey = nil
+		} else {
+			updated.YouTrackProjectKey = &yt
+		}
 	}
 	if in.OwnerOnly != nil && *in.OwnerOnly != p.OwnerOnly {
 		if err := s.store.SetProjectOwnerOnly(r.Context(), p.ID, *in.OwnerOnly); err != nil {

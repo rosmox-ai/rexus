@@ -10,14 +10,20 @@ import (
 // Message is one alert, independent of where it is delivered. Every message
 // carries the project and a link back into Rexus (plan.md §8.1).
 type Message struct {
-	Event      string
-	Severity   string // critical | warning | ok | info
-	Headline   string // e.g. "DOWN — Acme Web (acme-web)"
-	Lines      []string
-	Link       string
-	ProjectKey string
-	ServiceKey string // set when the source resource belongs to a service
-	DedupeKey  string // set for reminders: each goes to each channel once
+	Event        string
+	Severity     string // critical | warning | ok | info
+	Headline     string // e.g. "DOWN — Acme Web (acme-web)"
+	Lines        []string
+	Link         string
+	ProjectKey   string
+	ServiceKey   string // set when the source resource belongs to a service
+	Environment  string // optional environment name (e.g. prod)
+	ResourceType string // check | job | secret | ssl
+	ResourceID   string // UUID of the check, job, or secret
+	ResourceKey  string // stable incident key (e.g. check:UUID) for YouTrack dedupe/recovery
+	DueDate      string // optional YYYY-MM-DD for expiring secrets / SSL certs
+	Snippet      string // optional diagnostic snippet (e.g. job response body)
+	DedupeKey    string // set for reminders: each goes to each channel once
 }
 
 func emojiFor(sev string) string {

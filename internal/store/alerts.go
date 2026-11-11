@@ -61,7 +61,7 @@ func (s *Store) CountAlertChannels(ctx context.Context) (int, error) {
 
 func (s *Store) CreateAlertChannel(ctx context.Context, typ, name string, configEnc []byte, enabled bool, createdBy string) (*AlertChannel, error) {
 	return scanChannel(s.Pool.QueryRow(ctx, `INSERT INTO alert_channels (type, name, config_enc, enabled, created_by)
-		VALUES ($1, $2, $3, $4, $5) RETURNING `+channelCols, typ, name, configEnc, enabled, createdBy))
+		VALUES ($1, $2, $3, $4, $5) RETURNING `+channelCols, typ, name, configEnc, enabled, nullIfEmpty(createdBy)))
 }
 
 // UpdateAlertChannel changes the name/enabled flag, and the config too when configEnc is non-nil.

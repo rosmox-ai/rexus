@@ -40,6 +40,10 @@ type Config struct {
 	SMTPPassword string
 	SMTPFrom     string
 
+	// Optional YouTrack integration (auto-seeded channel + project mapping).
+	YouTrackURL   string
+	YouTrackToken string
+
 	// Toggles (plan.md §3.1)
 	TwoFAMode       string
 	LoginOwnerOnly  bool
@@ -151,6 +155,15 @@ func Load() (*Config, []string, error) {
 
 	c.ModuleScheduler = parseBool("REXUS_MODULE_SCHEDULER", true, fail)
 	c.ModuleVault = parseBool("REXUS_MODULE_VAULT", true, fail)
+
+	c.YouTrackURL = strings.TrimRight(strings.TrimSpace(os.Getenv("REXUS_YOUTRACK_URL")), "/")
+	c.YouTrackToken = strings.TrimSpace(os.Getenv("REXUS_YOUTRACK_TOKEN"))
+	if c.YouTrackURL != "" && !strings.HasPrefix(c.YouTrackURL, "http://") && !strings.HasPrefix(c.YouTrackURL, "https://") {
+		fail("REXUS_YOUTRACK_URL must start with http:// or https://, got %q", c.YouTrackURL)
+	}
+	if c.YouTrackURL != "" && c.YouTrackToken == "" {
+		warnings = append(warnings, "REXUS_YOUTRACK_URL is set but REXUS_YOUTRACK_TOKEN is empty")
+	}
 
 	if len(errs) > 0 {
 		return nil, warnings, fmt.Errorf("invalid configuration:\n  - %w", joinErrs(errs))

@@ -4,13 +4,20 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { NavIcon } from '../icons'
 import { ActionMenu, Badge, Button, Card, Empty, ErrorBox, Field, Input, Modal, PageHeader, Select, Spinner, Textarea, cx, fmtTime, timeAgo } from '../ui'
 
-const TYPE_LABEL: Record<ChannelType, string> = { telegram: 'Telegram', discord: 'Discord', slack: 'Slack', email: 'Email' }
+const TYPE_LABEL: Record<ChannelType, string> = {
+  telegram: 'Telegram',
+  discord: 'Discord',
+  slack: 'Slack',
+  email: 'Email',
+  youtrack: 'YouTrack',
+}
 
 const HELP: Record<ChannelType, string> = {
   telegram: 'Create a bot with @BotFather and copy its token. Add the bot to your group, then use the group’s chat ID (a negative number) — or @yourchannel for a public channel.',
   discord: 'In Discord: Channel settings → Integrations → Webhooks → New Webhook → Copy Webhook URL.',
   slack: 'Create an Incoming Webhook at api.slack.com/apps (Incoming Webhooks → Add New Webhook to Workspace) and copy its URL.',
   email: 'Alerts are emailed to these addresses through the SMTP relay configured on the server.',
+  youtrack: 'Connect JetBrains YouTrack Cloud (or Server) using a Permanent Token (Profile → Account Security → New token… with YouTrack scope). Rexus automatically creates, deduplicates, comments on, and resolves incident & rotation tickets.',
 }
 
 interface ChannelsResp {
@@ -280,6 +287,12 @@ function ChannelRow({ channel: c, onEdit, onChanged }: { channel: AlertChannel; 
           <div className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-zinc-400">/status replies</dt><dd className="text-zinc-200">{c.command_chat_id ? `Chat ${c.command_chat_id}` : 'Off'}</dd></div>
         </dl>
       )}
+      {c.type === 'youtrack' && (
+        <dl className="mt-4 space-y-2 rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2.5 text-xs">
+          <div className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-zinc-400">Default project</dt><dd className="mono text-zinc-200">{c.youtrack_project || 'Auto-detect'}</dd></div>
+          <div className="flex flex-wrap justify-between gap-x-3 gap-y-1"><dt className="text-zinc-400">Auto-resolve on recovery</dt><dd className="text-zinc-200">{c.auto_resolve !== false ? 'On' : 'Off'}</dd></div>
+        </dl>
+      )}
       <div className="mt-4 flex flex-wrap gap-2">
         <Button variant="secondary" onClick={onEdit}>Configure</Button>
         <Button variant="ghost" onClick={runTest} disabled={test === 'sending'}>{test === 'sending' ? 'Sending…' : 'Send test'}</Button>
@@ -306,6 +319,10 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
   const [digestTimezone, setDigestTimezone] = useState(existing?.digest?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
   const [webhook, setWebhook] = useState('')
   const [to, setTo] = useState(existing?.type === 'email' ? existing.summary.split(', ').join('\n') : '')
+  const [ytUrl, setYtUrl] = useState(existing?.youtrack_url ?? '')
+  const [ytToken, setYtToken] = useState('')
+  const [ytProject, setYtProject] = useState(existing?.youtrack_project ?? '')
+  const [autoResolve, setAutoResolve] = useState(existing?.auto_resolve ?? true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const editing = !!existing
@@ -323,6 +340,11 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
       config.digest = { time: digestEnabled ? digestTime : '', timezone: digestTimezone }
     } else if (type === 'email') {
       config.to = to.split(/[\s,;]+/).filter(Boolean)
+    } else if (type === 'youtrack') {
+      config.youtrack_url = ytUrl.trim()
+      if (ytToken) config.youtrack_token = ytToken.trim()
+      config.youtrack_project = ytProject.trim()
+      config.auto_resolve = autoResolve
     } else if (webhook) {
       config.webhook_url = webhook
     }
@@ -408,6 +430,23 @@ function ChannelModal({ existing, smtp, onClose, onSaved }: { existing?: AlertCh
           <Field label="Send to" hint="One or more addresses, separated by commas or new lines (max 10)">
             <Textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} required placeholder="ops@yourcompany.com" />
           </Field>
+        )}
+        {type === 'youtrack' && (
+          <>
+            <Field label="YouTrack URL" hint="Your YouTrack Cloud or Server base URL">
+              <Input value={ytUrl} onChange={(e) => setYtUrl(e.target.value)} className="mono" required placeholder="https://yourteam.youtrack.cloud" />
+            </Field>
+            <Field label="Permanent token" hint={keep || 'Starts with perm-…'}>
+              <Input type="password" value={ytToken} onChange={(e) => setYtToken(e.target.value)} className="mono" autoComplete="off" required={!editing} placeholder="perm-…" />
+            </Field>
+            <Field label="Default YouTrack project key (optional)" hint="Fallback project shortName (e.g. VID) when a Rexus project doesn't specify its own YouTrack project.">
+              <Input value={ytProject} onChange={(e) => setYtProject(e.target.value)} className="mono" placeholder="VID" />
+            </Field>
+            <label className="flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={autoResolve} onChange={(e) => setAutoResolve(e.target.checked)} className="h-4 w-4 accent-emerald-500" />
+              Auto-resolve YouTrack issues when checks/jobs recover or secrets rotate
+            </label>
+          </>
         )}
 
         <label className="flex items-center gap-2 text-sm text-zinc-300">

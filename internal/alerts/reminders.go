@@ -39,6 +39,7 @@ func (s *Service) Start(ctx context.Context, modules func() SummaryModules) {
 func (s *Service) RunReminders(ctx context.Context) {
 	s.secretReminders(ctx)
 	s.sslReminders(ctx)
+	s.RefreshOpenLinks(ctx)
 }
 
 func (s *Service) secretReminders(ctx context.Context) {
@@ -61,13 +62,18 @@ func (s *Service) secretReminders(ctx context.Context) {
 			continue
 		}
 		s.NotifySync(ctx, Message{
-			Event:      EventSecretExpiring,
-			Severity:   expirySeverity(*sec.DaysLeft),
-			Headline:   "KEY EXPIRING — " + scopedLine(sec.ProjectName, sec.ProjectKey, sec.ServiceKey),
-			Lines:      []string{fmt.Sprintf("Secret: %s (%s)", sec.Name, sec.EnvironmentName), fmt.Sprintf("Expires: %s — %s", *sec.ExpiresOn, expiryText(*sec.DaysLeft))},
-			Link:       s.Link("/projects/" + sec.ProjectKey),
-			ProjectKey: sec.ProjectKey,
-			ServiceKey: deref(sec.ServiceKey),
+			Event:        EventSecretExpiring,
+			Severity:     expirySeverity(*sec.DaysLeft),
+			Headline:     "KEY EXPIRING — " + scopedLine(sec.ProjectName, sec.ProjectKey, sec.ServiceKey),
+			Lines:        []string{fmt.Sprintf("Secret: %s (%s)", sec.Name, sec.EnvironmentName), fmt.Sprintf("Expires: %s — %s", *sec.ExpiresOn, expiryText(*sec.DaysLeft))},
+			Link:         s.Link("/projects/" + sec.ProjectKey),
+			ProjectKey:   sec.ProjectKey,
+			ServiceKey:   deref(sec.ServiceKey),
+			Environment:  sec.EnvironmentName,
+			ResourceType: "secret",
+			ResourceID:   sec.ID,
+			ResourceKey:  "secret:" + sec.ID,
+			DueDate:      *sec.ExpiresOn,
 			// A new expiry date (the key was rotated) starts fresh.
 			DedupeKey: fmt.Sprintf("secret:%s:%s:%s", sec.ID, *sec.ExpiresOn, bucket),
 		})
@@ -103,10 +109,15 @@ func (s *Service) sslReminders(ctx context.Context) {
 				fmt.Sprintf("Check: %s — %s", c.Name, c.URL),
 				fmt.Sprintf("Certificate expires %s — %s", dateOnly(*c.SSLExpiresAt), expiryText(left)),
 			},
-			Link:       s.Link("/checks/" + c.ID),
-			ProjectKey: c.ProjectKey,
-			ServiceKey: deref(c.ServiceKey),
-			DedupeKey:  fmt.Sprintf("ssl:%s:%s:%s", c.ID, dateOnly(*c.SSLExpiresAt), bucket),
+			Link:         s.Link("/checks/" + c.ID),
+			ProjectKey:   c.ProjectKey,
+			ServiceKey:   deref(c.ServiceKey),
+			Environment:  deref(c.EnvironmentName),
+			ResourceType: "ssl",
+			ResourceID:   c.ID,
+			ResourceKey:  "ssl:" + c.ID,
+			DueDate:      dateOnly(*c.SSLExpiresAt),
+			DedupeKey:    fmt.Sprintf("ssl:%s:%s:%s", c.ID, dateOnly(*c.SSLExpiresAt), bucket),
 		})
 	}
 }

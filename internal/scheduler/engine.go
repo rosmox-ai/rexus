@@ -194,6 +194,8 @@ func (e *Engine) execute(ctx context.Context, j *store.Job, runID string) {
 	// One alert when a job starts failing — not on every failed run after that.
 	if run.Status == "failed" && (prev == nil || *prev != "failed") {
 		e.alerts.JobFailed(j, run)
+	} else if run.Status == "success" && prev != nil && *prev == "failed" {
+		e.alerts.JobRecovered(j, run)
 	}
 }
 

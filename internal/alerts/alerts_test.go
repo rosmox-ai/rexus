@@ -475,3 +475,32 @@ func TestSMTPNotConfigured(t *testing.T) {
 		t.Fatal("Configured() wrong")
 	}
 }
+
+func TestYouTrackValidationAndMarkdown(t *testing.T) {
+	const token = "perm-secret-token-value-12345"
+	cfg := Config{YouTrackURL: "https://rosmox.youtrack.cloud/", YouTrackToken: token, YouTrackProj: " vid "}
+	if err := cfg.Validate(TypeYouTrack, false); err != nil {
+		t.Fatalf("valid YouTrack config rejected: %v", err)
+	}
+	if cfg.YouTrackURL != "https://rosmox.youtrack.cloud" || cfg.YouTrackProj != "VID" {
+		t.Fatalf("normalized fields wrong: url=%q proj=%q", cfg.YouTrackURL, cfg.YouTrackProj)
+	}
+	sum := cfg.Summary(TypeYouTrack)
+	if strings.Contains(sum, token) || !strings.Contains(sum, "rosmox.youtrack.cloud") || !strings.Contains(sum, "VID") {
+		t.Fatalf("bad YouTrack summary: %q", sum)
+	}
+
+	m := sample
+	m.ProjectKey = "vidyakalp"
+	m.ServiceKey = "api"
+	m.Environment = "production"
+	m.DueDate = "2026-12-01"
+	m.Snippet = `{"error":"connection timeout"}`
+	desc := m.youtrackDescriptionMarkdown()
+	for _, want := range []string{"`vidyakalp`", "`api`", "`production`", "**2026-12-01**", "connection timeout", "[Open in Rexus]"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("markdown description missing %q in:\n%s", want, desc)
+		}
+	}
+}
+

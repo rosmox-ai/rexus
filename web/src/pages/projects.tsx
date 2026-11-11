@@ -10,6 +10,7 @@ import { ProjectVault } from './vault'
 import { ProjectServices, ScopeBar, serviceQuery, useServices } from './services'
 import { ProjectDeployTokens } from './deploy_tokens'
 import { ProjectAccessModal } from './access'
+import { ProjectYouTrackSection, useYouTrackStatus } from './youtrack'
 
 const KEY_HINT = '2–40 characters: lowercase letters, numbers and dashes. Used in URLs and by external tools.'
 
@@ -184,6 +185,7 @@ export function ProjectsPage() {
                   <Badge>{p.check_count} check{p.check_count === 1 ? '' : 's'}</Badge>
                   {scheduler && <Badge>{p.job_count} job{p.job_count === 1 ? '' : 's'}</Badge>}
                   {scheduler && p.failing_jobs > 0 && <Badge tone="red">{p.failing_jobs} failing</Badge>}
+                  {p.youtrack_project_key && <Badge tone="sky">YT · {p.youtrack_project_key}</Badge>}
                 </div>
               </Card>
             </Link>
@@ -236,11 +238,13 @@ export function ProjectsPage() {
 
 export function ProjectNewPage() {
   const navigate = useNavigate()
+  const { status: ytStatus } = useYouTrackStatus()
   const [name, setName] = useState('')
   const [key, setKey] = useState('')
   const [keyTouched, setKeyTouched] = useState(false)
   const [description, setDescription] = useState('')
   const [website, setWebsite] = useState('')
+  const [ytProjectKey, setYtProjectKey] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -249,7 +253,10 @@ export function ProjectNewPage() {
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ project: Project }>('/api/projects', { method: 'POST', body: { name, key, description, website_url: website } })
+      const r = await api<{ project: Project }>('/api/projects', {
+        method: 'POST',
+        body: { name, key, description, website_url: website, youtrack_project_key: ytProjectKey || null },
+      })
       navigate(`/projects/${r.project.key}`)
     } catch (err) {
       setError((err as Error).message)
@@ -288,6 +295,16 @@ export function ProjectNewPage() {
           <Field label="Website (optional)" hint="For quick access — shows as a link on the dashboard and project pages.">
             <Input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className="mono" placeholder="https://app.example.com" />
           </Field>
+          {ytStatus?.configured && ytStatus.projects.length > 0 && (
+            <Field label="YouTrack project (optional)" hint="Where alerts and issues for this project are created in YouTrack.">
+              <Select value={ytProjectKey} onChange={(e) => setYtProjectKey(e.target.value)}>
+                <option value="">Default ({ytStatus.default_project || ytStatus.projects[0]?.shortName || 'auto'})</option>
+                {ytStatus.projects.map((p) => (
+                  <option key={p.id} value={p.shortName}>{p.name} ({p.shortName})</option>
+                ))}
+              </Select>
+            </Field>
+          )}
           <Field label="Description (optional)">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </Field>
@@ -437,15 +454,19 @@ export function ProjectDetailPage() {
           )}
         </section>
       )}
+
+      <ProjectYouTrackSection project={project} writable={writable} admin={admin} onProjectUpdated={setProject} />
     </>
   )
 }
 
 function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onCancel: () => void; onSaved: (p: Project) => void }) {
+  const { status: ytStatus } = useYouTrackStatus()
   const [name, setName] = useState(project.name)
   const [key, setKey] = useState(project.key)
   const [description, setDescription] = useState(project.description)
   const [website, setWebsite] = useState(project.website_url ?? '')
+  const [ytProjectKey, setYtProjectKey] = useState(project.youtrack_project_key ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const renaming = key !== project.key
@@ -456,7 +477,10 @@ function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onC
     setBusy(true)
     setError(null)
     try {
-      const r = await api<{ project: Project }>(`/api/projects/${project.key}`, { method: 'PATCH', body: { name, key, description, website_url: website } })
+      const r = await api<{ project: Project }>(`/api/projects/${project.key}`, {
+        method: 'PATCH',
+        body: { name, key, description, website_url: website, youtrack_project_key: ytProjectKey },
+      })
       onSaved(r.project)
     } catch (err) {
       setError((err as Error).message)
@@ -482,6 +506,16 @@ function ProjectEditForm({ project, onCancel, onSaved }: { project: Project; onC
         <Field label="Website" hint="For quick access — shows as a link on the dashboard and project pages. Leave empty for none.">
           <Input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} className="mono" placeholder="https://app.example.com" />
         </Field>
+        {ytStatus?.configured && ytStatus.projects.length > 0 && (
+          <Field label="YouTrack project" hint="Where alerts and issues for this project are created in YouTrack.">
+            <Select value={ytProjectKey} onChange={(e) => setYtProjectKey(e.target.value)}>
+              <option value="">Default ({ytStatus.default_project || ytStatus.projects[0]?.shortName || 'auto'})</option>
+              {ytStatus.projects.map((p) => (
+                <option key={p.id} value={p.shortName}>{p.name} ({p.shortName})</option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Description">
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
         </Field>

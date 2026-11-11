@@ -192,6 +192,24 @@ func (s *Service) send(ctx context.Context, m Message, ch *store.AlertChannel) e
 	if err != nil {
 		return errors.New("channel settings can't be read (was REXUS_MASTER_KEY changed?)")
 	}
+	if ch.Type == TypeYouTrack {
+		var err error
+		for attempt := 0; attempt < 2; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+			}
+			err = s.ytDeliver(ctx, cfg, m)
+			var se *sendError
+			if err == nil || !errors.As(err, &se) || !se.retry {
+				return err
+			}
+		}
+		return err
+	}
 	return s.sender.Send(ctx, ch.Type, cfg, m)
 }
 

@@ -26,6 +26,9 @@ type channelView struct {
 	CreatedAt     time.Time              `json:"created_at"`
 	CommandChatID *string                `json:"command_chat_id,omitempty"`
 	Digest        *alerts.DigestSchedule `json:"digest,omitempty"`
+	YouTrackURL   string                 `json:"youtrack_url,omitempty"`
+	YouTrackProj  string                 `json:"youtrack_project,omitempty"`
+	AutoResolve   *bool                  `json:"auto_resolve,omitempty"`
 }
 
 func (s *Server) channelView(ch *store.AlertChannel) channelView {
@@ -35,6 +38,11 @@ func (s *Server) channelView(ch *store.AlertChannel) channelView {
 	} else {
 		v.Summary = cfg.Summary(ch.Type)
 		v.CommandChatID, v.Digest = cfg.CommandChatID, cfg.Digest
+		if ch.Type == alerts.TypeYouTrack {
+			v.YouTrackURL = cfg.YouTrackURL
+			v.YouTrackProj = cfg.YouTrackProj
+			v.AutoResolve = cfg.AutoResolve
+		}
 	}
 	return v
 }
@@ -182,6 +190,15 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request, a *
 		}
 		if cfg.Digest == nil {
 			cfg.Digest = old.Digest
+		}
+		if cfg.YouTrackToken == "" {
+			cfg.YouTrackToken = old.YouTrackToken
+		}
+		if cfg.YouTrackURL == "" {
+			cfg.YouTrackURL = old.YouTrackURL
+		}
+		if cfg.AutoResolve == nil {
+			cfg.AutoResolve = old.AutoResolve
 		}
 		if err := cfg.Validate(ch.Type, s.alerts.SMTPConfigured()); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())

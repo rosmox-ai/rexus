@@ -7,6 +7,7 @@ import { Button, Card, Empty, PageHeader, Select, cx, timeAgo } from '../../ui'
 import { fmtDuration, responseStats, uptimeOf } from '../charts'
 import { degradedReason, fmtPct } from '../health'
 import { ExpiryBadge } from '../vault'
+import { useYouTrackLinks, YouTrackBadge } from '../youtrack'
 import { useSection, type AllSeries, REFRESH_MS, RANGES, type RangeId, type AlertsStatus, type RecentEvent, readStoredFilter, storeFilter, isStale, scopeName, SEVERITY, type AttentionItem } from './shared'
 import { ProjectGrid } from './project_grid'
 import { AttentionPanel } from './attention'
@@ -30,6 +31,7 @@ export function DashboardPage() {
   const [events, loadEvents] = useSection<RecentEvent[]>()
   const [alertsStatus, loadAlerts] = useSection<AlertsStatus>()
   const [backup, loadBackup] = useSection<BackupStatus>()
+  const { forResource, reload: reloadYT } = useYouTrackLinks()
   // Selected project key, '' = all my projects. Lives in the URL (?project=key, shareable) and falls back
   // to the last choice made in this browser.
   const [params, setParams] = useSearchParams()
@@ -79,9 +81,10 @@ export function DashboardPage() {
       ]).then(([c, h]) => ({ channels: c.channels, history: h.alerts }))))
     }
     await Promise.all(calls)
+    reloadYT()
     setNow(Date.now())
     setRefreshing(false)
-  }, [meta, admin, showBackup, range, loadProjects, loadChecks, loadSeries, loadEvents, loadAlerts, loadJobs, loadSecrets, loadBackup])
+  }, [meta, admin, showBackup, range, loadProjects, loadChecks, loadSeries, loadEvents, loadAlerts, loadJobs, loadSecrets, loadBackup, reloadYT])
 
   useEffect(() => {
     refresh()
@@ -124,14 +127,17 @@ export function DashboardPage() {
     ...down.map((c): AttentionItem => ({
       id: `d${c.id}`, tone: 'red', label: 'Down', title: c.name, to: `/checks/${c.id}`,
       sub: `${scopeName(c)}${c.last_error ? ` · ${c.last_error}` : ''}${c.status_since ? ` · since ${timeAgo(c.status_since)}` : ''}`,
+      right: <YouTrackBadge link={forResource('check', c.id) ?? forResource('ssl', c.id)} />,
     })),
     ...(failingJobs ?? []).map((j): AttentionItem => ({
       id: `j${j.id}`, tone: 'red', label: 'Job failed', title: j.name, to: `/jobs/${j.id}`,
       sub: `${scopeName(j)}${j.last_run_at ? ` · last run ${timeAgo(j.last_run_at)}` : ''}`,
+      right: <YouTrackBadge link={forResource('job', j.id)} />,
     })),
     ...(expiring ?? []).filter((s) => (s.days_left ?? 0) <= 7).map((s): AttentionItem => ({
       id: `s${s.id}`, tone: 'red', label: 'Key expiring', title: s.name, to: `/projects/${s.project_key}`,
-      sub: `${scopeName(s)} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
+      sub: `${scopeName(s)} · ${s.environment}`,
+      right: <span className="flex items-center gap-1.5"><YouTrackBadge link={forResource('secret', s.id)} /><ExpiryBadge secret={s} /></span>,
     })),
     ...(alertsStatus.data ? failingChannels(alertsStatus.data) : []).map((ch): AttentionItem => ({
       id: `a${ch.id}`, tone: 'red', label: 'Alerts failing', title: ch.name, to: '/alerts',
@@ -140,6 +146,7 @@ export function DashboardPage() {
     ...degraded.map((c): AttentionItem => ({
       id: `g${c.id}`, tone: 'amber', label: 'Degraded', title: c.name, to: `/checks/${c.id}`,
       sub: `${scopeName(c)} · ${degradedReason(c)}`,
+      right: <YouTrackBadge link={forResource('check', c.id) ?? forResource('ssl', c.id)} />,
     })),
     ...stale.filter((c) => c.status !== 'down').map((c): AttentionItem => ({
       id: `t${c.id}`, tone: 'amber', label: 'No recent result', title: c.name, to: `/checks/${c.id}`,
@@ -151,7 +158,8 @@ export function DashboardPage() {
     })),
     ...(expiring ?? []).filter((s) => (s.days_left ?? 0) > 7).map((s): AttentionItem => ({
       id: `s${s.id}`, tone: 'amber', label: 'Key expiring', title: s.name, to: `/projects/${s.project_key}`,
-      sub: `${scopeName(s)} · ${s.environment}`, right: <ExpiryBadge secret={s} />,
+      sub: `${scopeName(s)} · ${s.environment}`,
+      right: <span className="flex items-center gap-1.5"><YouTrackBadge link={forResource('secret', s.id)} /><ExpiryBadge secret={s} /></span>,
     })),
   ]
 

@@ -42,7 +42,15 @@ func (s *Service) CheckChanged(ch *store.HealthChange) {
 		return
 	}
 	checkLine := fmt.Sprintf("Check: %s — %s %s", c.Name, c.Method, c.URL)
-	base := Message{ProjectKey: c.ProjectKey, ServiceKey: deref(c.ServiceKey), Link: s.Link("/checks/" + c.ID)}
+	base := Message{
+		ProjectKey:   c.ProjectKey,
+		ServiceKey:   deref(c.ServiceKey),
+		Environment:  deref(c.EnvironmentName),
+		ResourceType: "check",
+		ResourceID:   c.ID,
+		ResourceKey:  "check:" + c.ID,
+		Link:         s.Link("/checks/" + c.ID),
+	}
 	proj := scopedLine(c.ProjectName, c.ProjectKey, c.ServiceKey)
 
 	switch {
@@ -77,8 +85,18 @@ func (s *Service) CheckChanged(ch *store.HealthChange) {
 // on the change from working to failed, so a job that keeps failing doesn't
 // repeat the alert).
 func (s *Service) JobFailed(j *store.Job, run *store.JobRun) {
-	m := Message{Event: EventJobFailed, Severity: "critical", Link: s.Link("/jobs/" + j.ID),
-		ProjectKey: j.ProjectKey, ServiceKey: deref(j.ServiceKey)}
+	m := Message{
+		Event:        EventJobFailed,
+		Severity:     "critical",
+		Link:         s.Link("/jobs/" + j.ID),
+		ProjectKey:   j.ProjectKey,
+		ServiceKey:   deref(j.ServiceKey),
+		Environment:  deref(j.EnvironmentName),
+		ResourceType: "job",
+		ResourceID:   j.ID,
+		ResourceKey:  "job:" + j.ID,
+		Snippet:      deref(run.ResponseSnippet),
+	}
 	m.Headline = "JOB FAILED — " + scopedLine(j.ProjectName, j.ProjectKey, j.ServiceKey)
 	m.Lines = []string{fmt.Sprintf("Job: %s — %s %s", j.Name, j.Config.Method, j.Config.URL)}
 	if run.Error != nil {
@@ -86,6 +104,28 @@ func (s *Service) JobFailed(j *store.Job, run *store.JobRun) {
 	}
 	m.Lines = append(m.Lines, fmt.Sprintf("Attempts: %d", run.Attempts), "When: "+fmtUTC(time.Now()))
 	s.Notify(m)
+}
+
+// JobRecovered resolves any open YouTrack incident for a job that succeeded after failing.
+func (s *Service) JobRecovered(j *store.Job, run *store.JobRun) {
+	msg := fmt.Sprintf("Job **%s** succeeded on its latest run (HTTP %d, %d ms).", j.Name, intVal(run.StatusCode), intVal(run.DurationMS))
+	s.ResolveResourceAsync("job:"+j.ID, msg)
+}
+
+// SecretRotated resolves any open YouTrack rotation task when a secret's value or expiry is updated.
+func (s *Service) SecretRotated(sec *store.Secret) {
+	msg := fmt.Sprintf("Secret `%s` (%s) was updated in Rexus Vault (version %d).", sec.Name, sec.EnvironmentName, sec.CurrentVersion)
+	if sec.ExpiresOn != nil {
+		msg += fmt.Sprintf(" New expiry date: **%s**.", *sec.ExpiresOn)
+	}
+	s.ResolveResourceAsync("secret:"+sec.ID, msg)
+}
+
+func intVal(p *int) int {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 // NewDeviceLogin alerts that someone logged in from an IP/browser not seen before.
