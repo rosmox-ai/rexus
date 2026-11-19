@@ -283,3 +283,39 @@ func (s *Server) handleCreateYouTrackIssue(w http.ResponseWriter, r *http.Reques
 		"issue": issue,
 	})
 }
+
+func (s *Server) handleSetYouTrackIssueState(w http.ResponseWriter, r *http.Request, a *authCtx) {
+	if !requireWrite(w, a) {
+		return
+	}
+	issueID := strings.TrimSpace(r.PathValue("id"))
+	if issueID == "" {
+		writeError(w, http.StatusBadRequest, "issue id is required")
+		return
+	}
+	var in struct {
+		Resolved bool `json:"resolved"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	issue, err := s.alerts.SetIssueResolved(r.Context(), issueID, in.Resolved)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	action := "youtrack.issue_reopen"
+	if in.Resolved {
+		action = "youtrack.issue_resolve"
+	}
+	s.audit(r, a, action, "youtrack_issue", issue.IDReadable, map[string]any{
+		"issue":    issue.IDReadable,
+		"state":    issue.State,
+		"resolved": in.Resolved,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"issue":    issue,
+		"state":    issue.State,
+		"resolved": issue.Resolved != nil || in.Resolved,
+	})
+}

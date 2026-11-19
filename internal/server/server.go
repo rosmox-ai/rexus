@@ -224,6 +224,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/youtrack/status", s.authed(s.handleYouTrackStatus))
 	mux.HandleFunc("GET /api/youtrack/links", s.authed(s.handleListYouTrackLinks))
 	mux.HandleFunc("POST /api/youtrack/sync", s.authed(s.handleSyncYouTrackLinks))
+	mux.HandleFunc("POST /api/youtrack/issues/{id}/state", s.authed(s.handleSetYouTrackIssueState))
 	mux.HandleFunc("GET /api/projects/{key}/youtrack/issues", s.authed(s.handleProjectYouTrackIssues))
 	mux.HandleFunc("POST /api/projects/{key}/youtrack/issues", s.authed(s.handleCreateYouTrackIssue))
 

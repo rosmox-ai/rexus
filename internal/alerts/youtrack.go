@@ -357,6 +357,67 @@ func (s *Service) resolveYouTrackByDedupe(ctx context.Context, cfg *Config, dedu
 	return nil
 }
 
+// SetIssueResolved transitions a YouTrack issue to a resolved (Done/Fixed/Resolved) or open state
+// and syncs any matching local youtrack_links row.
+func (s *Service) SetIssueResolved(ctx context.Context, issueID string, resolved bool) (*YTIssue, error) {
+	cfg, _, err := s.ActiveYouTrackConfig(ctx)
+	if err != nil {
+		return nil, errors.New("YouTrack is not configured yet — add a YouTrack channel under Alerts → Channels")
+	}
+	cmds := []string{"State Done", "State Fixed", "State Resolved", "State Closed"}
+	if !resolved {
+		cmds = []string{"State Open", "State To Do", "State Submitted", "State In Progress"}
+	}
+	var lastErr error
+	applied := false
+	for _, cmd := range cmds {
+		if err := s.applyYTCommand(ctx, cfg, issueID, cmd); err == nil {
+			applied = true
+			break
+		} else {
+			lastErr = err
+		}
+	}
+	if !applied {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errors.New("could not update issue state in YouTrack")
+	}
+
+	baseURL := strings.TrimRight(cfg.YouTrackURL, "/")
+	endpoint := baseURL + "/api/issues/" + url.PathEscape(issueID) +
+		"?fields=id,idReadable,summary,resolved,created,updated,project(shortName,name),customFields(name,value(name,login,fullName))"
+	status, body, err := s.ytRequest(ctx, http.MethodGet, endpoint, cfg.YouTrackToken, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, ytAPIError(status, body)
+	}
+	var raw rawYTIssue
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("invalid YouTrack response: %w", err)
+	}
+	iss := raw.toYTIssue(baseURL)
+	var prio, ass *string
+	if iss.Priority != "" {
+		p := iss.Priority
+		prio = &p
+	}
+	if iss.Assignee != "" {
+		a := iss.Assignee
+		ass = &a
+	}
+	isResolved := iss.Resolved != nil
+	if resolved && !isResolved {
+		// Some YouTrack workflows use a non-resolved "Done" state; keep the user's intent consistent locally.
+		isResolved = true
+	}
+	_ = s.store.UpdateYouTrackLinkByIssueID(ctx, iss.ID, iss.IDReadable, iss.Summary, iss.State, prio, ass, isResolved)
+	return &iss, nil
+}
+
 // CreateManualIssue creates a YouTrack issue from a 1-click user action in Rexus and links it if tied to a resource.
 func (s *Service) CreateManualIssue(ctx context.Context, in YTIssueCreateInput) (*store.YouTrackLink, *YTIssue, error) {
 	cfg, _, err := s.ActiveYouTrackConfig(ctx)
