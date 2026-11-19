@@ -284,6 +284,7 @@ export function TicketsPage() {
   const [error, setError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [params, setParams] = useSearchParams()
 
   const q = params.get('q') ?? ''
@@ -332,6 +333,33 @@ export function TicketsPage() {
       setError((e as Error).message)
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const toggleResolved = async (l: YouTrackLink, resolved: boolean) => {
+    setUpdatingId(l.id)
+    setError(null)
+    try {
+      const r = await api<{ state: string; resolved: boolean }>(
+        `/api/youtrack/issues/${encodeURIComponent(l.issue_id)}/state`,
+        { method: 'POST', body: { resolved } },
+      )
+      setLinks((prev) =>
+        (prev ?? []).map((item) =>
+          item.id === l.id
+            ? {
+                ...item,
+                resolved: r.resolved,
+                state: r.state || (r.resolved ? 'Done' : 'Open'),
+                updated_at: new Date().toISOString(),
+              }
+            : item,
+        ),
+      )
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setUpdatingId(null)
     }
   }
 
@@ -538,6 +566,7 @@ export function TicketsPage() {
                 <th className="px-4 py-2.5 font-medium">Priority</th>
                 <th className="px-4 py-2.5 font-medium">Assignee</th>
                 <th className="px-4 py-2.5 text-right font-medium">Updated</th>
+                {writable && <th className="px-4 py-2.5 text-right font-medium">Action</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/70">
@@ -602,6 +631,29 @@ export function TicketsPage() {
                   <td className="whitespace-nowrap px-4 py-2.5 text-right text-xs text-zinc-500" title={`Created ${fmtTime(l.created_at)} · Updated ${fmtTime(l.updated_at)}`}>
                     {timeAgo(l.updated_at)}
                   </td>
+                  {writable && (
+                    <td className="whitespace-nowrap px-4 py-2.5 text-right">
+                      {l.resolved ? (
+                        <button
+                          type="button"
+                          disabled={updatingId === l.id}
+                          onClick={() => toggleResolved(l, false)}
+                          className="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 transition hover:border-zinc-500 hover:text-zinc-200 disabled:opacity-50"
+                        >
+                          {updatingId === l.id ? 'Updating…' : 'Reopen'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={updatingId === l.id}
+                          onClick={() => toggleResolved(l, true)}
+                          className="rounded border border-emerald-800/80 bg-emerald-950/40 px-2 py-0.5 text-xs font-medium text-emerald-300 transition hover:border-emerald-600 hover:bg-emerald-900/50 disabled:opacity-50"
+                        >
+                          {updatingId === l.id ? 'Updating…' : 'Mark done'}
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

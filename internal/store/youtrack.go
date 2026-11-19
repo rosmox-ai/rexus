@@ -103,6 +103,19 @@ func (s *Store) UpdateYouTrackLinkStatus(ctx context.Context, id, summary, state
 	return err
 }
 
+// UpdateYouTrackLinkByIssueID updates any tracked link matching the given YouTrack issue ID or readable ID.
+func (s *Store) UpdateYouTrackLinkByIssueID(ctx context.Context, issueID, issueReadable, summary, state string, priority, assignee *string, resolved bool) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE youtrack_links SET
+		summary = COALESCE(NULLIF($3, ''), summary),
+		state = COALESCE(NULLIF($4, ''), state),
+		priority = $5,
+		assignee = $6,
+		resolved = $7,
+		updated_at = now()
+		WHERE issue_id = $1 OR ($2 <> '' AND issue_readable = $2)`, issueID, issueReadable, summary, state, priority, assignee, resolved)
+	return err
+}
+
 // ListYouTrackLinks returns tracked YouTrack issues visible to the caller.
 func (s *Store) ListYouTrackLinks(ctx context.Context, a Access, projectID string, onlyUnresolved bool, limit int) ([]*YouTrackLink, error) {
 	var b filterBuilder
