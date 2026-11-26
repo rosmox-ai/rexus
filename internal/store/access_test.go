@@ -41,4 +41,18 @@ func TestAccessConditions(t *testing.T) {
 	if !strings.Contains(none.sql(), "ANY(") {
 		t.Fatalf("an empty limit must still filter: %q", none.sql())
 	}
+
+	// Vault access adds the vault_access / all_vault condition.
+	var vb filterBuilder
+	vb.access("s.project_id", Access{Viewer: "7f3a9c2e-1111-4222-8333-944445555666"}.ForVault())
+	vgot := vb.sql()
+	if !strings.Contains(vgot, "pa.vault_access") || !strings.Contains(vgot, "vu.all_vault") || strings.Contains(vgot, "?") {
+		t.Fatalf("unexpected vault sql: %s", vgot)
+	}
+	// Unrestricted Access stays unrestricted even with ForVault().
+	var vopen filterBuilder
+	vopen.access("s.project_id", Access{}.ForVault())
+	if vopen.sql() != "" || len(vopen.args) != 0 {
+		t.Fatalf("unrestricted vault access must not filter: %q %v", vopen.sql(), vopen.args)
+	}
 }

@@ -8,12 +8,13 @@ import (
 
 // accessUser is one person in a project's sharing list.
 type accessUser struct {
-	ID         string `json:"id"`
-	Email      string `json:"email"`
-	Name       string `json:"name"`
-	Role       string `json:"role"`
-	Shared     bool   `json:"shared"`     // has an explicit grant to this project
-	Manageable bool   `json:"manageable"` // the caller may add or remove that grant
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Shared      bool   `json:"shared"`       // has an explicit grant to this project
+	VaultAccess bool   `json:"vault_access"` // has explicit vault access on this project
+	Manageable  bool   `json:"manageable"`   // the caller may add or remove that grant
 }
 
 // manageableForGrants says whose grants the caller may change: contributors and
@@ -50,6 +51,11 @@ func (s *Server) handleGetProjectAccess(w http.ResponseWriter, r *http.Request, 
 		s.internalError(w, r, err)
 		return
 	}
+	explicitVault, err := s.store.ProjectExplicitVaultUsers(r.Context(), p.ID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
 	shared := map[string]bool{}
 	for _, pe := range people {
 		if pe.Via == "shared" {
@@ -62,11 +68,12 @@ func (s *Server) handleGetProjectAccess(w http.ResponseWriter, r *http.Request, 
 			continue
 		}
 		list = append(list, accessUser{ID: u.ID, Email: u.Email, Name: u.Name, Role: u.Role,
-			Shared: shared[u.ID], Manageable: manageableForGrants(a.user.Role, u)})
+			Shared: shared[u.ID], VaultAccess: explicitVault[u.ID], Manageable: manageableForGrants(a.user.Role, u)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"owner_only":         p.OwnerOnly,
 		"can_set_owner_only": a.user.Role == "owner",
+		"can_manage_vault":   p.VaultAccess,
 		"people":             people,
 		"users":              list,
 	})
@@ -83,9 +90,14 @@ func (s *Server) handleSetProjectAccess(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	var in struct {
-		UserIDs []string `json:"user_ids"`
+		UserIDs      []string  `json:"user_ids"`
+		VaultUserIDs *[]string `json:"vault_user_ids"`
 	}
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if in.VaultUserIDs != nil && !p.VaultAccess {
+		writeError(w, http.StatusForbidden, "you don't have vault access to this project")
 		return
 	}
 	users, err := s.store.ListUsers(r.Context())
@@ -116,10 +128,36 @@ func (s *Server) handleSetProjectAccess(w http.ResponseWriter, r *http.Request, 
 			emails = append(emails, u.Email)
 		}
 	}
-	if err := s.store.SetProjectGrants(r.Context(), p.ID, chosen, manageableIDs, a.user.ID); err != nil {
+	vaultChosen := []string{}
+	vaultEmails := []string{}
+	canManageVault := in.VaultUserIDs != nil && p.VaultAccess
+	if canManageVault {
+		vseen := map[string]bool{}
+		for _, id := range *in.VaultUserIDs {
+			u := manageable[id]
+			if u == nil {
+				writeError(w, http.StatusBadRequest, "you can't change vault access for one of those people")
+				return
+			}
+			if !seen[id] {
+				writeError(w, http.StatusBadRequest, "vault access requires project access")
+				return
+			}
+			if !vseen[id] {
+				vseen[id] = true
+				vaultChosen = append(vaultChosen, id)
+				vaultEmails = append(vaultEmails, u.Email)
+			}
+		}
+	}
+	if err := s.store.SetProjectGrants(r.Context(), p.ID, chosen, vaultChosen, manageableIDs, canManageVault, a.user.ID); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	s.audit(r, a, "project.access", "project", p.ID, map[string]any{"project": p.Key, "shared_with": emails})
+	details := map[string]any{"project": p.Key, "shared_with": emails}
+	if canManageVault {
+		details["vault_with"] = vaultEmails
+	}
+	s.audit(r, a, "project.access", "project", p.ID, details)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

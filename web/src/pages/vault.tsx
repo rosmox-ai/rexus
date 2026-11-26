@@ -1131,7 +1131,7 @@ export function VaultPage() {
       {!secrets ? (
         <Spinner />
       ) : all.length === 0 ? (
-        <Empty title="No secrets found">{searching ? 'Try a different search.' : 'Add secrets from a project page.'}</Empty>
+        <Empty title="No secrets found">{searching ? 'Try a different search.' : 'Add secrets from a project page, or ask an admin to enable vault access for your projects.'}</Empty>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[230px_minmax(0,1fr)]">
           {/* folder tree */}

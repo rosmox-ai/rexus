@@ -137,6 +137,9 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request, a *au
 		if existing.ProjectID == nil || !s.visible(w, r, *existing.ProjectID, "token not found (or already revoked)") {
 			return
 		}
+		if !s.requireVault(w, r, *existing.ProjectID) {
+			return
+		}
 	} else if !requireAdmin(w, a) {
 		return
 	}

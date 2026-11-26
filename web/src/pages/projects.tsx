@@ -441,9 +441,9 @@ export function ProjectDetailPage() {
 
       <ProjectChecks project={project} services={services} scope={scope} />
 
-      {meta?.modules.vault && <ProjectVault project={project} services={services} scope={scope} onChanged={reloadServices} />}
+      {meta?.modules.vault && project.vault_access && <ProjectVault project={project} services={services} scope={scope} onChanged={reloadServices} />}
 
-      {meta?.modules.vault && <ProjectDeployTokens project={project} services={services} writable={writable} />}
+      {meta?.modules.vault && project.vault_access && <ProjectDeployTokens project={project} services={services} writable={writable} />}
 
       {accessOpen && <ProjectAccessModal project={project} onClose={() => setAccessOpen(false)} onChanged={load} />}
 

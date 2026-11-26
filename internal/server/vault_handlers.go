@@ -154,6 +154,11 @@ func (s *Server) handleListEnvironments(w http.ResponseWriter, r *http.Request, 
 		s.internalError(w, r, err)
 		return
 	}
+	if !p.VaultAccess {
+		for _, e := range envs {
+			e.SecretCount = 0
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"environments": envs})
 }
 
@@ -263,6 +268,9 @@ func (s *Server) loadSecret(w http.ResponseWriter, r *http.Request) (*store.Secr
 	if !s.visible(w, r, sec.ProjectID, "secret not found") {
 		return nil, false
 	}
+	if !s.requireVault(w, r, sec.ProjectID) {
+		return nil, false
+	}
 	return sec, true
 }
 
@@ -339,6 +347,9 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request, a *a
 	}
 	env, ok := s.loadEnv(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireVault(w, r, env.ProjectID) {
 		return
 	}
 	var in secretInput
@@ -523,6 +534,9 @@ func (s *Server) handleCopyAllSecrets(w http.ResponseWriter, r *http.Request, a 
 	}
 	env, ok := s.loadEnv(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireVault(w, r, env.ProjectID) {
 		return
 	}
 	scope, ok := scopeFilterParam(w, r, "service")

@@ -24,9 +24,13 @@ func (s *Server) handleListDeployTokens(w http.ResponseWriter, r *http.Request, 
 		if !ok {
 			return
 		}
+		if !p.VaultAccess {
+			writeJSON(w, http.StatusOK, map[string]any{"tokens": []*store.APIToken{}, "max": maxDeployTokens, "url": s.settings.Get().BaseURL})
+			return
+		}
 		projectID = p.ID
 	}
-	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindDeploy, projectID, s.access(r))
+	tokens, err := s.store.ListTokens(r.Context(), store.TokenKindDeploy, projectID, s.access(r).ForVault())
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -61,6 +65,9 @@ func (s *Server) handleCreateDeployToken(w http.ResponseWriter, r *http.Request,
 	}
 	p, ok := s.projectByKey(w, r, in.Project)
 	if !ok {
+		return
+	}
+	if !s.requireVault(w, r, p.ID) {
 		return
 	}
 	envs, err := s.store.ListEnvironments(r.Context(), p.ID)

@@ -97,6 +97,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request, a *
 			p.YouTrackProjectKey = &yt
 		}
 	}
+	p.VaultAccess = true
 	s.audit(r, a, "project.create", "project", p.ID, map[string]any{"key": p.Key, "name": p.Name})
 	writeJSON(w, http.StatusCreated, map[string]any{"project": p})
 }

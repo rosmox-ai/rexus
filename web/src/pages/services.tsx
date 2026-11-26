@@ -163,7 +163,8 @@ export function ProjectServices({ project, services, onChanged }: { project: Pro
                   {!s.repository_url && s.root_directory && <div className="mt-0.5 truncate text-xs text-zinc-500 mono">{s.root_directory}</div>}
                   <div className="mt-1.5 text-xs text-zinc-400">
                     {s.check_count} check{s.check_count === 1 ? '' : 's'} · {s.job_count} job{s.job_count === 1 ? '' : 's'}
-                    {s.failing_jobs > 0 && <span className="text-red-400"> ({s.failing_jobs} failing)</span>} · {s.secret_count} secret{s.secret_count === 1 ? '' : 's'}
+                    {s.failing_jobs > 0 && <span className="text-red-400"> ({s.failing_jobs} failing)</span>}
+                    {project.vault_access && <> · {s.secret_count} secret{s.secret_count === 1 ? '' : 's'}</>}
                   </div>
                 </div>
                 {writable && (

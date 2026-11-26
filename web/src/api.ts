@@ -60,6 +60,7 @@ export interface User {
   last_login_at: string | null
   created_at: string
   all_projects: boolean // admins: sees every project that isn't owner-only
+  all_vault: boolean // admins with all_projects: vault access on every non-owner-only project
 }
 
 export interface SessionResp {
@@ -78,6 +79,7 @@ export interface Project {
   job_count: number
   failing_jobs: number
   owner_only: boolean // hidden from every admin unless the owner shares it with them
+  vault_access: boolean // whether the current user can access this project's vault secrets
   health_status: HealthStatus | 'none'
   check_count: number
   service_count: number
@@ -376,7 +378,9 @@ export interface Invite {
   expires_at: string
   created_at: string
   all_projects: boolean
+  all_vault: boolean
   projects: string[] // keys of the projects shared with the invitee (only ones you can see)
+  vault_projects: string[] // keys of the projects where the invitee also gets vault access
 }
 
 export interface AuditRow {

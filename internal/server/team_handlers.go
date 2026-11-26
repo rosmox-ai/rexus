@@ -104,9 +104,15 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request, a *auth
 		s.internalError(w, r, err)
 		return
 	}
+	vaultGrants, err := s.store.VaultGrantsByUser(r.Context(), s.access(r))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"users":            users,
-		"grants":           grants, // user ID → keys of the projects shared with them (only ones you can see)
+		"grants":           grants,      // user ID → keys of the projects shared with them (only ones you can see)
+		"vault_grants":     vaultGrants, // user ID → keys of the projects where they have vault access
 		"assignable_roles": assignableRoles(a.user.Role),
 	})
 }
@@ -137,6 +143,32 @@ func (s *Server) projectIDsFor(w http.ResponseWriter, r *http.Request, keys []st
 	return ids, true
 }
 
+// vaultProjectIDsFor turns project keys into IDs, refusing any the actor doesn't
+// have vault access to — nobody can grant vault access they don't have themselves.
+func (s *Server) vaultProjectIDsFor(w http.ResponseWriter, r *http.Request, keys []string) ([]string, bool) {
+	ids, ok, err := s.store.ProjectIDsByKeys(r.Context(), keys)
+	if err != nil {
+		s.internalError(w, r, err)
+		return nil, false
+	}
+	if !ok {
+		writeError(w, http.StatusBadRequest, "one of the projects doesn't exist")
+		return nil, false
+	}
+	for _, id := range ids {
+		can, err := s.store.CanSeeVault(r.Context(), s.access(r), id)
+		if err != nil {
+			s.internalError(w, r, err)
+			return nil, false
+		}
+		if !can {
+			writeError(w, http.StatusForbidden, "you don't have vault access to one of those projects")
+			return nil, false
+		}
+	}
+	return ids, true
+}
+
 func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *authCtx) {
 	if !requireAdmin(w, a) {
 		return
@@ -148,15 +180,17 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 	var in struct {
 		Role   *string `json:"role"`
 		Status *string `json:"status"`
-		// Project access: AllProjects is for admins (owner sets it); Projects are the keys shared
-		// with the user — within what you can see; grants to projects you can't see stay as they are.
-		AllProjects *bool     `json:"all_projects"`
-		Projects    *[]string `json:"projects"`
+		// Project access: AllProjects/AllVault are for admins (owner sets them);
+		// Projects/VaultProjects are the keys shared with the user within what you can see.
+		AllProjects   *bool     `json:"all_projects"`
+		AllVault      *bool     `json:"all_vault"`
+		Projects      *[]string `json:"projects"`
+		VaultProjects *[]string `json:"vault_projects"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if in.Role == nil && in.Status == nil && in.AllProjects == nil && in.Projects == nil {
+	if in.Role == nil && in.Status == nil && in.AllProjects == nil && in.AllVault == nil && in.Projects == nil && in.VaultProjects == nil {
 		writeError(w, http.StatusBadRequest, "nothing to change")
 		return
 	}
@@ -175,7 +209,17 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 			return
 		}
 	}
-	var grantIDs []string
+	if in.AllVault != nil {
+		if a.user.Role != "owner" {
+			writeError(w, http.StatusForbidden, "only the owner can give an admin vault access to all projects")
+			return
+		}
+		if *in.AllVault && targetRole != "admin" {
+			writeError(w, http.StatusBadRequest, "only admins can have vault access to all projects")
+			return
+		}
+	}
+	var grantIDs, vaultGrantIDs []string
 	if in.Projects != nil {
 		if targetRole == "admin" && a.user.Role != "owner" {
 			writeError(w, http.StatusForbidden, "only the owner can choose which projects an admin sees")
@@ -184,6 +228,28 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 		var ok bool
 		if grantIDs, ok = s.projectIDsFor(w, r, *in.Projects); !ok {
 			return
+		}
+	}
+	if in.VaultProjects != nil {
+		if targetRole == "admin" && a.user.Role != "owner" {
+			writeError(w, http.StatusForbidden, "only the owner can choose which projects an admin has vault access to")
+			return
+		}
+		var ok bool
+		if vaultGrantIDs, ok = s.vaultProjectIDsFor(w, r, *in.VaultProjects); !ok {
+			return
+		}
+		if in.Projects != nil {
+			allowed := map[string]bool{}
+			for _, id := range grantIDs {
+				allowed[id] = true
+			}
+			for _, id := range vaultGrantIDs {
+				if !allowed[id] {
+					writeError(w, http.StatusBadRequest, "vault access requires project access")
+					return
+				}
+			}
 		}
 	}
 	if in.Role != nil && *in.Role != u.Role {
@@ -224,18 +290,37 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 		}
 		s.audit(r, a, "user.access", "user", u.ID, map[string]any{"email": u.Email, "all_projects": *in.AllProjects})
 	}
-	if in.Projects != nil {
+	if in.AllVault != nil {
+		if err := s.store.SetAllVault(r.Context(), u.ID, *in.AllVault); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		s.audit(r, a, "user.vault_access", "user", u.ID, map[string]any{"email": u.Email, "all_vault": *in.AllVault})
+	}
+	if in.Projects != nil || in.VaultProjects != nil {
 		scope, err := s.store.VisibleProjectIDs(r.Context(), s.access(r))
 		if err != nil {
 			s.internalError(w, r, err)
 			return
+		}
+		var vaultScope []string
+		if in.VaultProjects != nil {
+			vaultScope, err = s.store.VisibleVaultProjectIDs(r.Context(), s.access(r))
+			if err != nil {
+				s.internalError(w, r, err)
+				return
+			}
 		}
 		before, err := s.store.UserGrantIDs(r.Context(), u.ID)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
 		}
-		if err := s.store.SetUserGrants(r.Context(), u.ID, grantIDs, scope, a.user.ID); err != nil {
+		targetProjects := grantIDs
+		if in.Projects == nil {
+			targetProjects = before
+		}
+		if err := s.store.SetUserGrants(r.Context(), u.ID, targetProjects, vaultGrantIDs, scope, vaultScope, a.user.ID); err != nil {
 			s.internalError(w, r, err)
 			return
 		}
@@ -248,8 +333,8 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, a *aut
 			}
 			return m
 		}
-		was, now, inScope := inSet(before), inSet(grantIDs), inSet(scope)
-		keys, _ := s.store.ProjectKeysByIDs(r.Context(), append(append([]string{}, before...), grantIDs...))
+		was, now, inScope := inSet(before), inSet(targetProjects), inSet(scope)
+		keys, _ := s.store.ProjectKeysByIDs(r.Context(), append(append([]string{}, before...), targetProjects...))
 		for id := range now {
 			if !was[id] {
 				s.auditProject(r, a, id, "user.access_grant", "user", u.ID, map[string]any{"email": u.Email, "project": keys[id]})
@@ -361,8 +446,10 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 		Email string `json:"email"`
 		Role  string `json:"role"`
 		// What the new user will see once they join (see handleUpdateUser).
-		AllProjects bool     `json:"all_projects"`
-		Projects    []string `json:"projects"`
+		AllProjects   bool     `json:"all_projects"`
+		AllVault      bool     `json:"all_vault"`
+		Projects      []string `json:"projects"`
+		VaultProjects []string `json:"vault_projects"`
 	}
 	if !decodeJSON(w, r, &in) {
 		return
@@ -380,7 +467,11 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 		writeError(w, http.StatusBadRequest, "only the owner can invite an admin with access to all projects")
 		return
 	}
-	if len(in.Projects) > 0 && in.Role == "admin" && a.user.Role != "owner" {
+	if in.AllVault && (!in.AllProjects || in.Role != "admin" || a.user.Role != "owner") {
+		writeError(w, http.StatusBadRequest, "only the owner can invite an admin with vault access to all projects")
+		return
+	}
+	if (len(in.Projects) > 0 || len(in.VaultProjects) > 0) && in.Role == "admin" && a.user.Role != "owner" {
 		writeError(w, http.StatusForbidden, "only the owner can choose which projects an admin sees")
 		return
 	}
@@ -391,8 +482,25 @@ func (s *Server) handleCreateInvite(w http.ResponseWriter, r *http.Request, a *a
 			return
 		}
 	}
+	vaultProjectIDs := []string{}
+	if len(in.VaultProjects) > 0 {
+		var ok bool
+		if vaultProjectIDs, ok = s.vaultProjectIDsFor(w, r, in.VaultProjects); !ok {
+			return
+		}
+		allowed := map[string]bool{}
+		for _, id := range projectIDs {
+			allowed[id] = true
+		}
+		for _, id := range vaultProjectIDs {
+			if !allowed[id] {
+				writeError(w, http.StatusBadRequest, "vault access requires project access")
+				return
+			}
+		}
+	}
 	token := crypto.RandomToken(32)
-	inv, err := s.store.CreateInvite(r.Context(), email, in.Role, crypto.HashToken(token), a.user.ID, time.Now().Add(inviteTTL), in.AllProjects, projectIDs)
+	inv, err := s.store.CreateInvite(r.Context(), email, in.Role, crypto.HashToken(token), a.user.ID, time.Now().Add(inviteTTL), in.AllProjects, in.AllVault, projectIDs, vaultProjectIDs)
 	if errors.Is(err, store.ErrConflict) {
 		writeError(w, http.StatusConflict, "a user with this email already exists")
 		return

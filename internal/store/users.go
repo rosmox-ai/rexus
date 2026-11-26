@@ -18,6 +18,7 @@ type User struct {
 	LastLoginAt       *time.Time `json:"last_login_at"`
 	CreatedAt         time.Time  `json:"created_at"`
 	AllProjects       bool       `json:"all_projects"` // admins: sees every project that is not owner-only
+	AllVault          bool       `json:"all_vault"`    // admins with all_projects: vault access on every non-owner-only project
 	PasswordHash      string     `json:"-"`
 	TOTPSecret        []byte     `json:"-"`
 	TOTPPendingSecret []byte     `json:"-"`
@@ -25,12 +26,12 @@ type User struct {
 }
 
 const userCols = `id, email, name, password_hash, role, status, totp_secret, totp_pending_secret,
-	totp_enabled, totp_last_step, last_login_at, created_at, all_projects`
+	totp_enabled, totp_last_step, last_login_at, created_at, all_projects, all_vault`
 
 func scanUser(row pgx.Row) (*User, error) {
 	u := &User{}
 	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.Status,
-		&u.TOTPSecret, &u.TOTPPendingSecret, &u.TOTPEnabled, &u.TOTPLastStep, &u.LastLoginAt, &u.CreatedAt, &u.AllProjects)
+		&u.TOTPSecret, &u.TOTPPendingSecret, &u.TOTPEnabled, &u.TOTPLastStep, &u.LastLoginAt, &u.CreatedAt, &u.AllProjects, &u.AllVault)
 	if err != nil {
 		return nil, notFound(err)
 	}

@@ -26,6 +26,8 @@ type Project struct {
 	ServiceCount int    `json:"service_count"`
 	// Hidden from every admin unless the owner shares it with them explicitly.
 	OwnerOnly bool `json:"owner_only"`
+	// Whether the current viewer may access this project's vault secrets (computed per caller).
+	VaultAccess bool `json:"vault_access"`
 }
 
 var projectKeyRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,38}[a-z0-9]$`)

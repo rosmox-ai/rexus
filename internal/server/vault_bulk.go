@@ -25,6 +25,9 @@ func (s *Server) handleBulkSecrets(w http.ResponseWriter, r *http.Request, a *au
 	if !ok {
 		return
 	}
+	if !s.requireVault(w, r, env.ProjectID) {
+		return
+	}
 	var in struct {
 		ServiceID *string `json:"service_id"` // nil / "" = the project directly
 		Overwrite bool    `json:"overwrite"`
@@ -149,6 +152,9 @@ func (s *Server) handleDeleteAllSecrets(w http.ResponseWriter, r *http.Request, 
 	}
 	env, ok := s.loadEnv(w, r)
 	if !ok {
+		return
+	}
+	if !s.requireVault(w, r, env.ProjectID) {
 		return
 	}
 	var in struct {
