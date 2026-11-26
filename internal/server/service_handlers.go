@@ -118,6 +118,11 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request, a *a
 		s.internalError(w, r, err)
 		return
 	}
+	if !p.VaultAccess {
+		for _, sv := range services {
+			sv.SecretCount = 0
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"services": services})
 }
 

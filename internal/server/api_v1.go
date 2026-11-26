@@ -328,7 +328,7 @@ func (s *Server) handleV1Project(w http.ResponseWriter, r *http.Request, t *stor
 		}
 		resp["jobs"] = jobs
 	}
-	if s.settings.Get().ModuleVault {
+	if s.settings.Get().ModuleVault && p.VaultAccess {
 		days := 30
 		expiring, err := s.v1Secrets(r, store.SecretFilter{ProjectID: p.ID, ExpiringDays: &days}, t)
 		if err != nil {
@@ -391,9 +391,14 @@ func (s *Server) handleV1Status(w http.ResponseWriter, r *http.Request, t *store
 		}
 		resp["jobs_total"], resp["jobs_failing"] = len(jobs), failing
 	}
-	if s.settings.Get().ModuleVault && env != store.ScopeNone { // every secret has an environment
+	if s.settings.Get().ModuleVault && p.VaultAccess && env != store.ScopeNone { // every secret has an environment
+		acc, err := s.tokenAccess(r, t)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
 		days := 30
-		f := store.SecretFilter{ProjectID: p.ID, Service: svc, ExpiringDays: &days}
+		f := store.SecretFilter{ProjectID: p.ID, Service: svc, ExpiringDays: &days, Access: acc}
 		if env != "" && env != store.ScopeNone {
 			f.EnvironmentID = string(env)
 		}
@@ -450,6 +455,10 @@ func (s *Server) handleV1ProjectSecrets(w http.ResponseWriter, r *http.Request, 
 	}
 	p, ok := s.v1Project(w, r, t)
 	if !ok {
+		return
+	}
+	if !p.VaultAccess {
+		writeError(w, http.StatusForbidden, "this token doesn't have vault access to this project")
 		return
 	}
 	svc, env, ok := s.v1Scope(w, r, p)
@@ -512,7 +521,7 @@ func (s *Server) v1Secret(w http.ResponseWriter, r *http.Request, t *store.APITo
 		s.internalError(w, r, err)
 		return nil, false
 	}
-	if ok, err := s.store.CanSee(r.Context(), acc, sec.ProjectID); err != nil {
+	if ok, err := s.store.CanSeeVault(r.Context(), acc, sec.ProjectID); err != nil {
 		s.internalError(w, r, err)
 		return nil, false
 	} else if !ok {

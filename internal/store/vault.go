@@ -181,7 +181,7 @@ func (s *Store) ListSecrets(ctx context.Context, f SecretFilter) ([]*Secret, err
 		b.add("s.project_id = ?", f.ProjectID)
 	}
 	b.scope("s.service_id", f.Service)
-	b.access("s.project_id", f.Access)
+	b.access("s.project_id", f.Access.ForVault())
 	if q := strings.TrimSpace(f.Query); q != "" {
 		b.add("(s.name ILIKE '%' || ? || '%' OR p.key ILIKE '%' || ? || '%' OR p.name ILIKE '%' || ? || '%' OR sv.key ILIKE '%' || ? || '%')", q)
 	}

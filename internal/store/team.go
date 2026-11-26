@@ -10,20 +10,22 @@ import (
 // ---- invites ----
 
 type Invite struct {
-	ID          string    `json:"id"`
-	Email       string    `json:"email"`
-	Role        string    `json:"role"`
-	InvitedBy   *string   `json:"invited_by"` // inviter's email
-	ExpiresAt   time.Time `json:"expires_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	AllProjects bool      `json:"all_projects"` // admin invites: sees every project that is not owner-only
-	Projects    []string  `json:"projects"`     // keys of the projects shared with the invitee (only those the viewer can see)
+	ID            string    `json:"id"`
+	Email         string    `json:"email"`
+	Role          string    `json:"role"`
+	InvitedBy     *string   `json:"invited_by"` // inviter's email
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	AllProjects   bool      `json:"all_projects"`   // admin invites: sees every project that is not owner-only
+	AllVault      bool      `json:"all_vault"`      // admin invites with all_projects: vault access on every non-owner-only project
+	Projects      []string  `json:"projects"`       // keys of the projects shared with the invitee (only those the viewer can see)
+	VaultProjects []string  `json:"vault_projects"` // keys of the projects where the invitee also gets vault access
 }
 
 // CreateInvite stores a new invite. Any open invite for the same email is
 // replaced (so "re-invite" gives a fresh link). A user with that email must
 // not already exist.
-func (s *Store) CreateInvite(ctx context.Context, email, role string, tokenHash []byte, invitedBy string, expires time.Time, allProjects bool, projectIDs []string) (*Invite, error) {
+func (s *Store) CreateInvite(ctx context.Context, email, role string, tokenHash []byte, invitedBy string, expires time.Time, allProjects, allVault bool, projectIDs, vaultProjectIDs []string) (*Invite, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -41,9 +43,9 @@ func (s *Store) CreateInvite(ctx context.Context, email, role string, tokenHash 
 		return nil, err
 	}
 	inv := &Invite{}
-	err = tx.QueryRow(ctx, `INSERT INTO invites (email, role, token_hash, invited_by, expires_at, all_projects)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, role, expires_at, created_at, all_projects`,
-		email, role, tokenHash, invitedBy, expires, allProjects).Scan(&inv.ID, &inv.Email, &inv.Role, &inv.ExpiresAt, &inv.CreatedAt, &inv.AllProjects)
+	err = tx.QueryRow(ctx, `INSERT INTO invites (email, role, token_hash, invited_by, expires_at, all_projects, all_vault)
+		VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, email, role, expires_at, created_at, all_projects, all_vault`,
+		email, role, tokenHash, invitedBy, expires, allProjects, allProjects && allVault).Scan(&inv.ID, &inv.Email, &inv.Role, &inv.ExpiresAt, &inv.CreatedAt, &inv.AllProjects, &inv.AllVault)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -51,12 +53,13 @@ func (s *Store) CreateInvite(ctx context.Context, email, role string, tokenHash 
 		return nil, err
 	}
 	if len(projectIDs) > 0 {
-		if _, err := tx.Exec(ctx, `INSERT INTO invite_projects (invite_id, project_id)
-			SELECT $1::uuid, p FROM unnest($2::uuid[]) p`, inv.ID, projectIDs); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO invite_projects (invite_id, project_id, vault_access)
+			SELECT $1::uuid, p, (p = ANY($3::uuid[])) FROM unnest($2::uuid[]) p`, inv.ID, projectIDs, vaultProjectIDs); err != nil {
 			return nil, err
 		}
 	}
 	inv.Projects = []string{}
+	inv.VaultProjects = []string{}
 	return inv, tx.Commit(ctx)
 }
 
@@ -69,9 +72,11 @@ func (s *Store) ListInvites(ctx context.Context, a Access) ([]*Invite, error) {
 	if len(b.where) > 0 {
 		vis = " AND " + strings.Join(b.where, " AND ")
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT i.id, i.email, i.role, u.email, i.expires_at, i.created_at, i.all_projects,
+	rows, err := s.Pool.Query(ctx, `SELECT i.id, i.email, i.role, u.email, i.expires_at, i.created_at, i.all_projects, i.all_vault,
 		COALESCE((SELECT array_agg(pp.key ORDER BY pp.key) FROM invite_projects ip JOIN projects pp ON pp.id = ip.project_id
-			WHERE ip.invite_id = i.id`+vis+`), '{}')
+			WHERE ip.invite_id = i.id`+vis+`), '{}'),
+		COALESCE((SELECT array_agg(pp.key ORDER BY pp.key) FROM invite_projects ip JOIN projects pp ON pp.id = ip.project_id
+			WHERE ip.invite_id = i.id AND ip.vault_access`+vis+`), '{}')
 		FROM invites i LEFT JOIN users u ON u.id = i.invited_by
 		WHERE i.used_at IS NULL AND i.expires_at > now() ORDER BY i.created_at DESC`, b.args...)
 	if err != nil {
@@ -81,7 +86,7 @@ func (s *Store) ListInvites(ctx context.Context, a Access) ([]*Invite, error) {
 	out := []*Invite{}
 	for rows.Next() {
 		i := &Invite{}
-		if err := rows.Scan(&i.ID, &i.Email, &i.Role, &i.InvitedBy, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects, &i.Projects); err != nil {
+		if err := rows.Scan(&i.ID, &i.Email, &i.Role, &i.InvitedBy, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects, &i.AllVault, &i.Projects, &i.VaultProjects); err != nil {
 			return nil, err
 		}
 		out = append(out, i)
@@ -90,9 +95,9 @@ func (s *Store) ListInvites(ctx context.Context, a Access) ([]*Invite, error) {
 }
 
 func (s *Store) RevokeInvite(ctx context.Context, id string) (*Invite, error) {
-	i := &Invite{Projects: []string{}}
+	i := &Invite{Projects: []string{}, VaultProjects: []string{}}
 	err := s.Pool.QueryRow(ctx, `DELETE FROM invites WHERE id = $1 AND used_at IS NULL
-		RETURNING id, email, role, expires_at, created_at, all_projects`, id).Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects)
+		RETURNING id, email, role, expires_at, created_at, all_projects, all_vault`, id).Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects, &i.AllVault)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -101,10 +106,10 @@ func (s *Store) RevokeInvite(ctx context.Context, id string) (*Invite, error) {
 
 // InviteByTokenHash returns the invite only if it is unused and unexpired.
 func (s *Store) InviteByTokenHash(ctx context.Context, tokenHash []byte) (*Invite, error) {
-	i := &Invite{Projects: []string{}}
-	err := s.Pool.QueryRow(ctx, `SELECT id, email, role, expires_at, created_at, all_projects FROM invites
+	i := &Invite{Projects: []string{}, VaultProjects: []string{}}
+	err := s.Pool.QueryRow(ctx, `SELECT id, email, role, expires_at, created_at, all_projects, all_vault FROM invites
 		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()`, tokenHash).
-		Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects)
+		Scan(&i.ID, &i.Email, &i.Role, &i.ExpiresAt, &i.CreatedAt, &i.AllProjects, &i.AllVault)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -121,14 +126,15 @@ func (s *Store) AcceptInvite(ctx context.Context, tokenHash []byte, name, passwo
 	defer tx.Rollback(ctx)
 
 	var id, email, role string
-	var allProjects bool
-	err = tx.QueryRow(ctx, `SELECT id, email, role, all_projects FROM invites
-		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`, tokenHash).Scan(&id, &email, &role, &allProjects)
+	var allProjects, allVault bool
+	err = tx.QueryRow(ctx, `SELECT id, email, role, all_projects, all_vault FROM invites
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE`, tokenHash).Scan(&id, &email, &role, &allProjects, &allVault)
 	if err != nil {
 		return nil, notFound(err)
 	}
-	u, err := scanUser(tx.QueryRow(ctx, `INSERT INTO users (email, name, password_hash, role, all_projects)
-		VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols, email, strings.TrimSpace(name), passwordHash, role, allProjects && role == "admin"))
+	isAdmin := role == "admin"
+	u, err := scanUser(tx.QueryRow(ctx, `INSERT INTO users (email, name, password_hash, role, all_projects, all_vault)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING `+userCols, email, strings.TrimSpace(name), passwordHash, role, allProjects && isAdmin, allProjects && allVault && isAdmin))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, ErrConflict
@@ -136,8 +142,8 @@ func (s *Store) AcceptInvite(ctx context.Context, tokenHash []byte, name, passwo
 		return nil, err
 	}
 	// The access the inviter chose, for projects that still exist.
-	if _, err := tx.Exec(ctx, `INSERT INTO project_access (user_id, project_id, granted_by)
-		SELECT $1, ip.project_id, i.invited_by FROM invite_projects ip JOIN invites i ON i.id = ip.invite_id
+	if _, err := tx.Exec(ctx, `INSERT INTO project_access (user_id, project_id, vault_access, granted_by)
+		SELECT $1, ip.project_id, ip.vault_access, i.invited_by FROM invite_projects ip JOIN invites i ON i.id = ip.invite_id
 		WHERE ip.invite_id = $2 ON CONFLICT DO NOTHING`, u.ID, id); err != nil {
 		return nil, err
 	}
@@ -168,7 +174,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 }
 
 func (s *Store) SetUserRole(ctx context.Context, id, role string) error {
-	tag, err := s.Pool.Exec(ctx, `UPDATE users SET role = $2::text, all_projects = (all_projects AND $2::text = 'admin'), updated_at = now()
+	tag, err := s.Pool.Exec(ctx, `UPDATE users SET role = $2::text, all_projects = (all_projects AND $2::text = 'admin'), all_vault = (all_vault AND $2::text = 'admin'), updated_at = now()
 		WHERE id = $1 AND role <> 'owner'`, id, role)
 	if err != nil {
 		return err
@@ -236,7 +242,7 @@ func (s *Store) TransferOwnership(ctx context.Context, fromID, toID string) erro
 		return ErrNotFound
 	}
 	// Demote first: the single-owner unique index is checked per statement.
-	if _, err := tx.Exec(ctx, `UPDATE users SET role = 'admin', all_projects = true, updated_at = now() WHERE id = $1`, fromID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE users SET role = 'admin', all_projects = true, all_vault = true, updated_at = now() WHERE id = $1`, fromID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET role = 'owner', updated_at = now() WHERE id = $1`, toID); err != nil {

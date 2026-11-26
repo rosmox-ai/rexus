@@ -15,20 +15,67 @@ export function useVisibleProjects() {
   return projects
 }
 
-/** A checklist of projects. */
-export function ProjectPicker({ projects, value, onChange, disabled }: { projects: Project[]; value: string[]; onChange: (keys: string[]) => void; disabled?: boolean }) {
+/** A checklist of projects, with an optional per-project Vault access checkbox. */
+export function ProjectPicker({
+  projects,
+  value,
+  onChange,
+  vaultValue,
+  onVaultChange,
+  disabled,
+}: {
+  projects: Project[]
+  value: string[]
+  onChange: (keys: string[]) => void
+  vaultValue?: string[]
+  onVaultChange?: (keys: string[]) => void
+  disabled?: boolean
+}) {
   if (projects.length === 0) return <p className="text-sm text-zinc-500">There are no projects you can share yet.</p>
-  const toggle = (k: string) => onChange(value.includes(k) ? value.filter((x) => x !== k) : [...value, k])
+  const showVault = vaultValue !== undefined && onVaultChange !== undefined
+  const toggle = (k: string) => {
+    const next = value.includes(k) ? value.filter((x) => x !== k) : [...value, k]
+    onChange(next)
+    if (showVault && !next.includes(k) && vaultValue.includes(k)) {
+      onVaultChange(vaultValue.filter((x) => x !== k))
+    }
+  }
+  const toggleVault = (k: string) => {
+    if (!showVault) return
+    onVaultChange(vaultValue.includes(k) ? vaultValue.filter((x) => x !== k) : [...vaultValue, k])
+  }
   return (
     <div className={cx('max-h-56 overflow-y-auto rounded-md border border-zinc-800 divide-y divide-zinc-800/70', disabled && 'opacity-50')}>
-      {projects.map((p) => (
-        <label key={p.id} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-900/60">
-          <input type="checkbox" className="accent-emerald-500" checked={value.includes(p.key)} disabled={disabled} onChange={() => toggle(p.key)} />
-          <span className="text-zinc-100">{p.name}</span>
-          <span className="mono text-xs text-zinc-500">{p.key}</span>
-          {p.owner_only && <Badge tone="amber">owner only</Badge>}
-        </label>
-      ))}
+      {projects.map((p) => {
+        const checked = value.includes(p.key)
+        const vaultChecked = showVault && vaultValue.includes(p.key)
+        const canToggleVault = checked && p.vault_access && !disabled
+        return (
+          <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-zinc-900/60">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+              <input type="checkbox" className="accent-emerald-500" checked={checked} disabled={disabled} onChange={() => toggle(p.key)} />
+              <span className="truncate text-zinc-100">{p.name}</span>
+              <span className="mono text-xs text-zinc-500">{p.key}</span>
+              {p.owner_only && <Badge tone="amber">owner only</Badge>}
+            </label>
+            {showVault && (
+              <label
+                className={cx('flex shrink-0 items-center gap-1.5 text-xs', canToggleVault ? 'cursor-pointer text-zinc-300' : 'cursor-not-allowed text-zinc-600')}
+                title={!p.vault_access ? "You don't have vault access to this project" : !checked ? 'Enable project access first' : 'Allow access to vault secrets'}
+              >
+                <input
+                  type="checkbox"
+                  className="accent-emerald-500"
+                  checked={vaultChecked}
+                  disabled={!canToggleVault}
+                  onChange={() => toggleVault(p.key)}
+                />
+                <span>Vault</span>
+              </label>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -42,15 +89,19 @@ export function AccessChoice({
   canSetAll,
   projects,
   allProjects,
+  allVault,
   keys,
+  vaultKeys,
   onChange,
 }: {
   role: string
   canSetAll: boolean
   projects: Project[]
   allProjects: boolean
+  allVault: boolean
   keys: string[]
-  onChange: (allProjects: boolean, keys: string[]) => void
+  vaultKeys: string[]
+  onChange: (allProjects: boolean, allVault: boolean, keys: string[], vaultKeys: string[]) => void
 }) {
   const isAdminRole = role === 'admin'
   return (
@@ -58,17 +109,36 @@ export function AccessChoice({
       {isAdminRole && canSetAll && (
         <div className="flex gap-4 text-sm">
           <label className="flex items-center gap-2 text-zinc-300">
-            <input type="radio" className="accent-emerald-500" checked={allProjects} onChange={() => onChange(true, keys)} /> All projects
+            <input type="radio" className="accent-emerald-500" checked={allProjects} onChange={() => onChange(true, allVault, keys, vaultKeys)} /> All projects
           </label>
           <label className="flex items-center gap-2 text-zinc-300">
-            <input type="radio" className="accent-emerald-500" checked={!allProjects} onChange={() => onChange(false, keys)} /> Selected projects
+            <input type="radio" className="accent-emerald-500" checked={!allProjects} onChange={() => onChange(false, false, keys, vaultKeys)} /> Selected projects
           </label>
         </div>
       )}
       {isAdminRole && allProjects ? (
-        <p className="text-xs text-zinc-500">Sees every project except ones you mark “owner only”. New projects appear for them automatically.</p>
+        <div className="space-y-2">
+          <p className="text-xs text-zinc-500">Sees every project except ones you mark “owner only”. New projects appear for them automatically.</p>
+          {canSetAll && (
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-zinc-300">
+              <input
+                type="checkbox"
+                className="accent-emerald-500"
+                checked={allVault}
+                onChange={(e) => onChange(true, e.target.checked, keys, vaultKeys)}
+              />
+              <span>Vault access for all projects</span>
+            </label>
+          )}
+        </div>
       ) : (
-        <ProjectPicker projects={projects} value={keys} onChange={(k) => onChange(false, k)} />
+        <ProjectPicker
+          projects={projects}
+          value={keys}
+          onChange={(k) => onChange(false, false, k, vaultKeys.filter((v) => k.includes(v)))}
+          vaultValue={vaultKeys}
+          onVaultChange={(vk) => onChange(false, false, keys, vk)}
+        />
       )}
       {isAdminRole && !allProjects && <p className="text-xs text-zinc-500">An admin always sees the projects they create themselves.</p>}
     </div>
@@ -76,10 +146,26 @@ export function AccessChoice({
 }
 
 /** Edit what one user can see (Users page). */
-export function UserAccessModal({ user, me, grants, onClose, onSaved }: { user: User; me: User; grants: string[]; onClose: () => void; onSaved: () => void }) {
+export function UserAccessModal({
+  user,
+  me,
+  grants,
+  vaultGrants,
+  onClose,
+  onSaved,
+}: {
+  user: User
+  me: User
+  grants: string[]
+  vaultGrants: string[]
+  onClose: () => void
+  onSaved: () => void
+}) {
   const projects = useVisibleProjects()
   const [all, setAll] = useState(user.all_projects)
+  const [allVault, setAllVault] = useState(user.all_vault)
   const [keys, setKeys] = useState(grants)
+  const [vaultKeys, setVaultKeys] = useState(vaultGrants)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const ownerEditing = me.role === 'owner'
@@ -89,8 +175,20 @@ export function UserAccessModal({ user, me, grants, onClose, onSaved }: { user: 
     setError(null)
     try {
       const body: Record<string, unknown> = {}
-      if (user.role === 'admin' && ownerEditing && all !== user.all_projects) body.all_projects = all
-      if (!(user.role === 'admin' && all)) body.projects = keys
+      if (user.role === 'admin' && ownerEditing) {
+        if (all !== user.all_projects) body.all_projects = all
+        if ((all ? allVault : false) !== user.all_vault) body.all_vault = all && allVault
+      }
+      if (!(user.role === 'admin' && all)) {
+        body.projects = keys
+        // Only send vault_projects for projects the actor can manage vault access on.
+        const manageableVault = new Set((projects ?? []).filter((p) => p.vault_access).map((p) => p.key))
+        body.vault_projects = vaultKeys.filter((k) => keys.includes(k) && manageableVault.has(k))
+      }
+      if (Object.keys(body).length === 0) {
+        onClose()
+        return
+      }
       await api(`/api/users/${user.id}`, { method: 'PATCH', body })
       onSaved()
     } catch (e) {
@@ -106,9 +204,23 @@ export function UserAccessModal({ user, me, grants, onClose, onSaved }: { user: 
         {!projects ? (
           <Spinner />
         ) : (
-          <AccessChoice role={user.role} canSetAll={ownerEditing} projects={projects} allProjects={all} keys={keys} onChange={(a, k) => { setAll(a); setKeys(k) }} />
+          <AccessChoice
+            role={user.role}
+            canSetAll={ownerEditing}
+            projects={projects}
+            allProjects={all}
+            allVault={allVault}
+            keys={keys}
+            vaultKeys={vaultKeys}
+            onChange={(a, av, k, vk) => {
+              setAll(a)
+              setAllVault(av)
+              setKeys(k)
+              setVaultKeys(vk)
+            }}
+          />
         )}
-        {me.role !== 'owner' && <p className="text-xs text-zinc-500">You can only share projects you can see yourself. Access they have to other projects stays as it is.</p>}
+        {me.role !== 'owner' && <p className="text-xs text-zinc-500">You can only share projects you can see yourself (and vault access only where you have it). Other access stays as it is.</p>}
         <ErrorBox error={error} />
         <div className="flex gap-2">
           <Button onClick={save} disabled={busy || !projects}>{busy ? 'Saving…' : 'Save'}</Button>
@@ -121,9 +233,9 @@ export function UserAccessModal({ user, me, grants, onClose, onSaved }: { user: 
 
 // ───────────────────────── project page: Access section ─────────────────────────
 
-interface Person { id: string; email: string; name: string; role: string; via: 'owner' | 'all_projects' | 'creator' | 'shared' }
-interface ShareUser { id: string; email: string; name: string; role: string; shared: boolean; manageable: boolean }
-interface AccessInfo { owner_only: boolean; can_set_owner_only: boolean; people: Person[]; users: ShareUser[] }
+interface Person { id: string; email: string; name: string; role: string; via: 'owner' | 'all_projects' | 'creator' | 'shared'; vault_access: boolean }
+interface ShareUser { id: string; email: string; name: string; role: string; shared: boolean; vault_access: boolean; manageable: boolean }
+interface AccessInfo { owner_only: boolean; can_set_owner_only: boolean; can_manage_vault: boolean; people: Person[]; users: ShareUser[] }
 
 const VIA: Record<Person['via'], string> = { owner: 'owner', all_projects: 'all projects', creator: 'created it', shared: 'shared' }
 
@@ -139,6 +251,7 @@ export function ProjectAccessModal({ project, onClose, onChanged }: { project: P
 function ProjectAccess({ project, onChanged }: { project: Project; onChanged: () => void }) {
   const [info, setInfo] = useState<AccessInfo | null>(null)
   const [chosen, setChosen] = useState<string[]>([])
+  const [vaultChosen, setVaultChosen] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -148,6 +261,7 @@ function ProjectAccess({ project, onChanged }: { project: Project; onChanged: ()
       .then((r) => {
         setInfo(r)
         setChosen(r.users.filter((u) => u.shared).map((u) => u.id))
+        setVaultChosen(r.users.filter((u) => u.shared && u.vault_access).map((u) => u.id))
       })
       .catch((e) => setError(e.message))
   }, [project.key])
@@ -158,7 +272,11 @@ function ProjectAccess({ project, onChanged }: { project: Project; onChanged: ()
     setError(null)
     setSaved(false)
     try {
-      await api(`/api/projects/${encodeURIComponent(project.key)}/access`, { method: 'PUT', body: { user_ids: chosen } })
+      const body: Record<string, unknown> = { user_ids: chosen }
+      if (info?.can_manage_vault) {
+        body.vault_user_ids = vaultChosen.filter((id) => chosen.includes(id))
+      }
+      await api(`/api/projects/${encodeURIComponent(project.key)}/access`, { method: 'PUT', body })
       setSaved(true)
       load()
     } catch (e) {
@@ -182,11 +300,27 @@ function ProjectAccess({ project, onChanged }: { project: Project; onChanged: ()
 
   if (!info) return error ? <ErrorBox error={error} /> : <Spinner />
   const shareable = info.users.filter((u) => u.manageable)
-  const dirty = JSON.stringify([...chosen].sort()) !== JSON.stringify(info.users.filter((u) => u.shared).map((u) => u.id).sort())
+  const initialShared = info.users.filter((u) => u.shared).map((u) => u.id).sort()
+  const initialVault = info.users.filter((u) => u.shared && u.vault_access).map((u) => u.id).sort()
+  const dirty =
+    JSON.stringify([...chosen].sort()) !== JSON.stringify(initialShared) ||
+    (info.can_manage_vault && JSON.stringify([...vaultChosen].sort()) !== JSON.stringify(initialVault))
+
+  const toggleUser = (id: string) => {
+    if (chosen.includes(id)) {
+      setChosen(chosen.filter((x) => x !== id))
+      setVaultChosen(vaultChosen.filter((x) => x !== id))
+    } else {
+      setChosen([...chosen, id])
+    }
+  }
+  const toggleVault = (id: string) => {
+    setVaultChosen(vaultChosen.includes(id) ? vaultChosen.filter((x) => x !== id) : [...vaultChosen, id])
+  }
 
   return (
     <div>
-      <p className="mb-3 text-sm text-zinc-500">Who can see this project. Contributors and viewers only see projects shared with them.</p>
+      <p className="mb-3 text-sm text-zinc-500">Who can see this project and its vault secrets. Contributors and viewers only see projects shared with them.</p>
       <ErrorBox error={error} />
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -196,7 +330,11 @@ function ProjectAccess({ project, onChanged }: { project: Project; onChanged: ()
             {info.people.map((p) => (
               <li key={p.id} className="flex items-center justify-between gap-3 text-sm">
                 <span className="min-w-0 truncate"><span className="text-zinc-100">{p.name || p.email}</span> <span className="text-xs text-zinc-500">{p.email}</span></span>
-                <span className="flex shrink-0 items-center gap-1.5"><Badge tone={p.role === 'owner' ? 'green' : p.role === 'admin' ? 'sky' : 'zinc'}>{p.role}</Badge><span className="text-xs text-zinc-500">{VIA[p.via]}</span></span>
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {p.vault_access && <Badge tone="green">vault</Badge>}
+                  <Badge tone={p.role === 'owner' ? 'green' : p.role === 'admin' ? 'sky' : 'zinc'}>{p.role}</Badge>
+                  <span className="text-xs text-zinc-500">{VIA[p.via]}</span>
+                </span>
               </li>
             ))}
           </ul>
@@ -208,14 +346,27 @@ function ProjectAccess({ project, onChanged }: { project: Project; onChanged: ()
             <p className="text-sm text-zinc-500">There is nobody to share with yet — invite people on the Users page.</p>
           ) : (
             <div className="max-h-56 divide-y divide-zinc-800/70 overflow-y-auto rounded-md border border-zinc-800">
-              {shareable.map((u) => (
-                <label key={u.id} className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-900/60">
-                  <input type="checkbox" className="accent-emerald-500" checked={chosen.includes(u.id)}
-                    onChange={() => setChosen(chosen.includes(u.id) ? chosen.filter((x) => x !== u.id) : [...chosen, u.id])} />
-                  <span className="min-w-0 truncate"><span className="text-zinc-100">{u.name || u.email}</span> <span className="text-xs text-zinc-500">{u.email}</span></span>
-                  <span className="ml-auto shrink-0"><Badge tone={u.role === 'admin' ? 'sky' : 'zinc'}>{u.role}</Badge></span>
-                </label>
-              ))}
+              {shareable.map((u) => {
+                const isShared = chosen.includes(u.id)
+                const isVault = vaultChosen.includes(u.id)
+                const canToggleVault = isShared && info.can_manage_vault
+                return (
+                  <div key={u.id} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-zinc-900/60">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                      <input type="checkbox" className="accent-emerald-500" checked={isShared} onChange={() => toggleUser(u.id)} />
+                      <span className="min-w-0 truncate"><span className="text-zinc-100">{u.name || u.email}</span> <span className="text-xs text-zinc-500">{u.email}</span></span>
+                    </label>
+                    <label
+                      className={cx('flex shrink-0 items-center gap-1.5 text-xs', canToggleVault ? 'cursor-pointer text-zinc-300' : 'cursor-not-allowed text-zinc-600')}
+                      title={!info.can_manage_vault ? "You don't have vault access to this project" : !isShared ? 'Share project first' : 'Allow access to vault secrets'}
+                    >
+                      <input type="checkbox" className="accent-emerald-500" checked={isVault} disabled={!canToggleVault} onChange={() => toggleVault(u.id)} />
+                      <span>Vault</span>
+                    </label>
+                    <span className="shrink-0"><Badge tone={u.role === 'admin' ? 'sky' : 'zinc'}>{u.role}</Badge></span>
+                  </div>
+                )
+              })}
             </div>
           )}
           <div className="mt-3 flex items-center gap-3">

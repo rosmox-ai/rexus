@@ -62,6 +62,21 @@ func (s *Server) visible(w http.ResponseWriter, r *http.Request, projectID, notF
 	return true
 }
 
+// requireVault checks that the caller has vault access to projectID (which they
+// can already see). Answers 403 if not.
+func (s *Server) requireVault(w http.ResponseWriter, r *http.Request, projectID string) bool {
+	ok, err := s.store.CanSeeVault(r.Context(), s.access(r), projectID)
+	if err != nil {
+		s.internalError(w, r, err)
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, "you don't have vault access to this project")
+		return false
+	}
+	return true
+}
+
 // projectByKey finds a project the caller may see (404 otherwise).
 func (s *Server) projectByKey(w http.ResponseWriter, r *http.Request, key string) (*store.Project, bool) {
 	p, err := s.store.ProjectByKeyFor(r.Context(), s.access(r), key)
